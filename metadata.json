@@ -1,0 +1,7 @@
+{
+  "name": "Armstech Artchiver Database Analyzer",
+  "description": "A comprehensive character model sheet, illustration, and database analyzer utilizing advanced Gemini scanning and duplicates tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

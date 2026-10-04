@@ -1,0 +1,26 @@
+{
+  "entities": {
+    "Item": {
+      "title": "Item",
+      "description": "A document, image, or file in the database",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "originalPath": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "storagePath": { "type": "string" }
+      },
+      "required": ["id", "name", "type", "createdAt", "ownerId"]
+    }
+  },
+  "firestore": {
+    "/items/{itemId}": {
+      "schema": "Item",
+      "description": "User's uploaded items"
+    }
+  }
+}
