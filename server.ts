@@ -41,6 +41,98 @@ console.error = (...args: any[]) => {
   originalError(...args);
 };
 
+// ---------------------------------------------------------------------------
+// AI Engine Settings (managed from inside the app via the Developer panel)
+// ---------------------------------------------------------------------------
+// Keys are stored in chararchive.config.json next to the app instead of .env so
+// the user never has to hand-edit a file. Loading the key into process.env on
+// boot keeps every existing Gemini code path below working unchanged.
+const CONFIG_PATH = path.join(process.cwd(), 'chararchive.config.json');
+const OLLAMA_DEFAULT_PORT = 11434;
+
+interface AIConfig {
+  provider: 'gemini' | 'ollama' | 'off';
+  geminiApiKey: string;
+  ollamaBaseUrl: string;
+  ollamaVisionModel: string;
+  ollamaTextModel: string;
+}
+
+const DEFAULT_AI_CONFIG: AIConfig = {
+  provider: 'gemini',
+  geminiApiKey: '',
+  ollamaBaseUrl: `http://127.0.0.1:${OLLAMA_DEFAULT_PORT}`,
+  ollamaVisionModel: 'qwen2.5vl:7b',
+  ollamaTextModel: 'dolphin-llama3:8b',
+};
+
+function loadAIConfig(): AIConfig {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+      return { ...DEFAULT_AI_CONFIG, ...(raw.ai || {}) };
+    }
+  } catch (err) {
+    console.error('Could not read chararchive.config.json:', err);
+  }
+  return { ...DEFAULT_AI_CONFIG };
+}
+
+function saveAIConfig(cfg: AIConfig) {
+  let existing: any = {};
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      existing = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    }
+  } catch (err) {
+    console.error('Could not parse existing config, starting fresh:', err);
+  }
+  existing.ai = cfg;
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(existing, null, 2), 'utf-8');
+}
+
+// Apply the saved key so all downstream `process.env.GEMINI_API_KEY` checks pass.
+function applyAIConfig(cfg: AIConfig) {
+  if (cfg.geminiApiKey) {
+    process.env.GEMINI_API_KEY = cfg.geminiApiKey;
+  } else {
+    delete process.env.GEMINI_API_KEY;
+  }
+}
+
+const OLLAMA_FALLBACK_PORTS = [11434, 11435, 11436];
+
+async function probeOllamaOnce(baseUrl: string) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return { running: false, models: [] as string[], error: `HTTP ${res.status}` };
+    const json: any = await res.json();
+    const models = (json.models || []).map((m: any) => m.name).filter(Boolean);
+    return { running: true, models, error: null as string | null };
+  } catch (err: any) {
+    return { running: false, models: [] as string[], error: err?.name === 'AbortError' ? 'Timed out' : String(err?.message || err) };
+  }
+}
+
+// Ollama moves to a different port when another instance holds the default one,
+// so probe the saved address first and then a couple of common fallbacks.
+async function probeOllama(baseUrl: string) {
+  const first = await probeOllamaOnce(baseUrl);
+  if (first.running) return first;
+
+  const tryPorts = OLLAMA_FALLBACK_PORTS.filter((p) => !baseUrl.includes(String(p)));
+  for (const port of tryPorts) {
+    const candidate = await probeOllamaOnce(`http://127.0.0.1:${port}`);
+    if (candidate.running) {
+      return { ...candidate, resolvedUrl: `http://127.0.0.1:${port}` };
+    }
+  }
+  return first;
+}
+
 // Utility function to robustly extract and parse JSON from Gemini text response
 function cleanAndParseJSON(text: string): any {
   if (!text) return {};
@@ -223,7 +315,14 @@ function getAllFilesRecursive(dirPath: string, relativeRoot: string = ''): { pat
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+
+  // Honour PORT from .env / environment instead of hardcoding, falling back to a
+  // free port if 3000 is already taken.
+  const PORT = Number(process.env.PORT) || 3000;
+
+  // Load any AI key saved from inside the app before routes are hit.
+  const aiConfig = loadAIConfig();
+  applyAIConfig(aiConfig);
 
   app.use((req, res, next) => {
     console.log(`Received request: ${req.method} ${req.url}`);
@@ -236,6 +335,109 @@ async function startServer() {
 
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok' });
+  });
+
+  // ---- AI engine settings -------------------------------------------------
+  // GET returns the current configuration. The API key itself is never sent
+  // back to the browser, only whether one is present plus a masked preview.
+  app.get('/api/settings/ai', async (req, res) => {
+    const cfg = loadAIConfig();
+    const masked = cfg.geminiApiKey
+      ? `${cfg.geminiApiKey.slice(0, 4)}${'*'.repeat(8)}${cfg.geminiApiKey.slice(-4)}`
+      : null;
+    const ollama = await probeOllama(cfg.ollamaBaseUrl);
+    // If auto-detection found Ollama on another port, remember it so the
+    // provider dropdown can be switched on without further hunting.
+    const resolvedUrl = (ollama as any).resolvedUrl;
+    if (resolvedUrl && resolvedUrl !== cfg.ollamaBaseUrl) {
+      cfg.ollamaBaseUrl = resolvedUrl;
+      saveAIConfig(cfg);
+    }
+    res.json({
+      success: true,
+      provider: cfg.provider,
+      hasGeminiKey: Boolean(cfg.geminiApiKey),
+      maskedKey: masked,
+      ollamaBaseUrl: cfg.ollamaBaseUrl,
+      ollamaVisionModel: cfg.ollamaVisionModel,
+      ollamaTextModel: cfg.ollamaTextModel,
+      ollamaRunning: ollama.running,
+      ollamaModels: ollama.models,
+      ollamaError: ollama.error,
+    });
+  });
+
+  app.post('/api/settings/ai', (req, res) => {
+    try {
+      const current = loadAIConfig();
+      const body = req.body || {};
+      const incoming: Partial<AIConfig> = body.ai || {};
+
+      const next: AIConfig = {
+        provider:
+          incoming.provider === 'ollama' || incoming.provider === 'off' || incoming.provider === 'gemini'
+            ? incoming.provider
+            : current.provider,
+        geminiApiKey:
+          typeof incoming.geminiApiKey === 'string' ? incoming.geminiApiKey.trim() : current.geminiApiKey,
+        ollamaBaseUrl:
+          typeof incoming.ollamaBaseUrl === 'string' && incoming.ollamaBaseUrl.trim()
+            ? incoming.ollamaBaseUrl.trim()
+            : current.ollamaBaseUrl,
+        ollamaVisionModel: incoming.ollamaVisionModel || current.ollamaVisionModel,
+        ollamaTextModel: incoming.ollamaTextModel || current.ollamaTextModel,
+      };
+
+      saveAIConfig(next);
+      applyAIConfig(next);
+      res.json({
+        success: true,
+        provider: next.provider,
+        hasGeminiKey: Boolean(next.geminiApiKey),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Could not save AI settings' });
+    }
+  });
+
+  // Clear the saved key without touching other stored preferences.
+  app.post('/api/settings/ai/clear-key', (req, res) => {
+    try {
+      const cfg = loadAIConfig();
+      cfg.geminiApiKey = '';
+      saveAIConfig(cfg);
+      applyAIConfig(cfg);
+      res.json({ success: true, hasGeminiKey: false });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Could not clear the API key' });
+    }
+  });
+
+  // Verify a key actually works before the user relies on it.
+  app.post('/api/settings/ai/test', async (req, res) => {
+    const key = String(req.body?.apiKey || process.env.GEMINI_API_KEY || '').trim();
+    if (!key) {
+      return res.json({ success: false, message: 'No API key provided.' });
+    }
+    try {
+      const probe = new GoogleGenAI({ apiKey: key });
+      await probe.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: 'Reply with the single word: OK',
+      });
+      res.json({ success: true, message: 'Gemini key is valid and responding.' });
+    } catch (err: any) {
+      res.json({
+        success: false,
+        message: String(err?.message || err).slice(0, 300),
+      });
+    }
+  });
+
+  app.post('/api/settings/ai/check-ollama', async (req, res) => {
+    const baseUrl = String(req.body?.ollamaBaseUrl || loadAIConfig().ollamaBaseUrl);
+    const probe = await probeOllama(baseUrl);
+    res.json({ success: true, ...probe });
   });
 
   app.get('/api/backup-source', (req, res) => {
@@ -1516,9 +1718,33 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  // Bind explicitly so a port clash produces a readable message instead of an
+  // unhandled 'error' event crash.
+  // Bind to loopback only. Nothing outside this machine needs to reach the
+  // archive, and staying off 0.0.0.0 stops Windows Firewall from prompting the
+  // user to grant network access every launch.
+  const HOST = process.env.HOST || '127.0.0.1';
+
+  const httpServer = await new Promise<any>((resolve, reject) => {
+    const s = app.listen(PORT, HOST, () => resolve(s));
+    s.on('error', reject);
   });
+
+  httpServer.on('error', (err: any) => {
+    if (err?.code === 'EADDRINUSE') {
+      console.error(
+        `Port ${PORT} is already in use. Close the other program using it, or set PORT in .env to a different number.`
+      );
+    } else {
+      console.error('Server error:', err);
+    }
+    process.exit(1);
+  });
+
+  console.log(`Server running on http://localhost:${PORT} (bound to ${HOST} only)`);
+  console.log(
+    `AI provider: ${aiConfig.provider} | Gemini key: ${aiConfig.geminiApiKey ? 'set' : 'not set'} | Ollama: ${aiConfig.ollamaBaseUrl}`
+  );
 }
 
 startServer();

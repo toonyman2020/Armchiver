@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Upload,
   UploadCloud,
@@ -659,6 +659,119 @@ export default function App() {
   const [selectedBackupFile, setSelectedBackupFile] = useState<string>("");
   const [backupFileSearch, setBackupFileSearch] = useState<string>("");
   const [backupSuccessMessage, setBackupSuccessMessage] = useState<string>("");
+
+  // AI engine settings (persisted server-side in chararchive.config.json)
+  const [aiSettings, setAiSettings] = useState<any>(null);
+  const [aiDraft, setAiDraft] = useState<any>({
+    provider: "gemini",
+    geminiApiKey: "",
+    ollamaBaseUrl: "http://127.0.0.1:11434",
+    ollamaVisionModel: "",
+    ollamaTextModel: "",
+  });
+  const [aiSettingsLoading, setAiSettingsLoading] = useState(false);
+  const [aiSettingsSaving, setAiSettingsSaving] = useState(false);
+  const [aiTestMessage, setAiTestMessage] = useState<string>("");
+
+  const loadAiSettings = useCallback(async () => {
+    setAiSettingsLoading(true);
+    try {
+      const res = await fetch("/api/settings/ai");
+      const json = await res.json();
+      if (json.success) {
+        setAiSettings(json);
+        setAiDraft((d: any) => ({
+          ...d,
+          provider: json.provider,
+          geminiApiKey: "",
+          ollamaBaseUrl: json.ollamaBaseUrl,
+          ollamaVisionModel: json.ollamaVisionModel,
+          ollamaTextModel: json.ollamaTextModel,
+        }));
+      }
+    } catch (e) {
+      console.error("Failed to load AI settings:", e);
+    } finally {
+      setAiSettingsLoading(false);
+    }
+  }, []);
+
+  const handleSaveAiSettings = async () => {
+    setAiSettingsSaving(true);
+    setAiTestMessage("");
+    try {
+      const res = await fetch("/api/settings/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ai: aiDraft }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setAiTestMessage("OK: Settings saved.");
+        await loadAiSettings();
+      } else {
+        setAiTestMessage(`Failed: ${json.error || "unknown error"}`);
+      }
+    } catch (e: any) {
+      setAiTestMessage(`Failed: ${e?.message || e}`);
+    } finally {
+      setAiSettingsSaving(false);
+    }
+  };
+
+  const handleClearGeminiKey = async () => {
+    setAiSettingsSaving(true);
+    try {
+      await fetch("/api/settings/ai/clear-key", { method: "POST" });
+      setAiDraft((d: any) => ({ ...d, geminiApiKey: "" }));
+      setAiTestMessage("Saved key removed from this computer.");
+      await loadAiSettings();
+    } finally {
+      setAiSettingsSaving(false);
+    }
+  };
+
+  const handleTestGeminiKey = async () => {
+    setAiSettingsSaving(true);
+    setAiTestMessage("");
+    try {
+      const res = await fetch("/api/settings/ai/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: aiDraft.geminiApiKey.trim() }),
+      });
+      const json = await res.json();
+      setAiTestMessage(
+        json.success ? `OK: ${json.message}` : `Failed: ${json.message || "unknown error"}`
+      );
+    } catch (e: any) {
+      setAiTestMessage(`Failed: ${e?.message || e}`);
+    } finally {
+      setAiSettingsSaving(false);
+    }
+  };
+
+  const handleCheckOllama = async () => {
+    setAiSettingsSaving(true);
+    try {
+      const res = await fetch("/api/settings/ai/check-ollama", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ollamaBaseUrl: aiDraft.ollamaBaseUrl }),
+      });
+      const json = await res.json();
+      if (json.running && json.resolvedUrl) {
+        setAiDraft((d: any) => ({ ...d, ollamaBaseUrl: json.resolvedUrl }));
+      }
+      await loadAiSettings();
+    } finally {
+      setAiSettingsSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    loadAiSettings();
+  }, [loadAiSettings]);
 
   const fetchBackupData = async () => {
     setBackupLoading(true);
@@ -5317,6 +5430,260 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                 </div>
 
                 {/* System Backup & Exporter Section */}
+                {/* AI ENGINE SETTINGS */}
+                <div className="p-4 bg-primary/5 rounded-lg border border-primary/20 space-y-3 mt-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+                      <Sparkles className="w-4 h-4 text-primary" />
+                      <span>AI Engine Settings</span>
+                    </div>
+                    {aiSettingsLoading ? (
+                      <span className="text-[10px] text-muted-foreground">Checking...</span>
+                    ) : aiSettings ? (
+                      <span
+                        className={`text-[10px] px-2 py-1 rounded font-semibold ${
+                          aiSettings.provider === "gemini" && !aiSettings.hasGeminiKey
+                            ? "bg-amber-500/10 text-amber-500"
+                            : aiSettings.provider === "ollama" && !aiSettings.ollamaRunning
+                              ? "bg-amber-500/10 text-amber-500"
+                              : aiSettings.provider === "off"
+                                ? "bg-muted text-muted-foreground"
+                                : "bg-emerald-500/10 text-emerald-500"
+                        }`}
+                      >
+                        {aiSettings.provider === "gemini"
+                          ? aiSettings.hasGeminiKey
+                            ? "Gemini Ready"
+                            : "Gemini: No Key"
+                          : aiSettings.provider === "ollama"
+                            ? aiSettings.ollamaRunning
+                              ? "Ollama Ready"
+                              : "Ollama Not Found"
+                            : "AI Disabled"}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <p className="text-[11px] text-muted-foreground">
+                    Choose which AI engine analyzes your images and text. Both
+                    options keep your data on this machine.
+                  </p>
+
+                  {/* Provider choice */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                      Active Provider
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {(
+                        [
+                          { id: "gemini", label: "Google Gemini" },
+                          { id: "ollama", label: "Local Ollama" },
+                          { id: "off", label: "Disabled" },
+                        ] as const
+                      ).map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setAiDraft((d) => ({ ...d, provider: p.id }))}
+                          className={`py-2 px-1 rounded text-[10px] font-semibold border transition-colors ${
+                            aiDraft.provider === p.id
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-secondary text-muted-foreground border-border hover:border-primary/40"
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Gemini key */}
+                  {aiDraft.provider === "gemini" && (
+                    <div className="space-y-2 rounded-md border border-border/50 bg-card/50 p-3">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                        Gemini API Key
+                      </label>
+                      <div className="flex gap-2 items-center">
+                        <input
+                          type="password"
+                          value={aiDraft.geminiApiKey}
+                          onChange={(e) =>
+                            setAiDraft((d) => ({ ...d, geminiApiKey: e.target.value }))
+                          }
+                          placeholder={
+                            aiSettings?.hasGeminiKey
+                              ? `Saved: ${aiSettings.maskedKey}`
+                              : "Paste your API key here"
+                          }
+                          className="flex-1 p-2 rounded bg-secondary text-xs border border-border outline-none focus:border-primary font-mono text-foreground"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setAiDraft((d) => ({ ...d, geminiApiKey: "" }))}
+                          className="px-2 py-2 rounded bg-secondary text-[10px] font-semibold border border-border hover:border-destructive/50 hover:text-destructive"
+                          title="Clear the key field"
+                        >
+                          Clear
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <button
+                          type="button"
+                          onClick={handleSaveAiSettings}
+                          disabled={aiSettingsSaving}
+                          className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-[10px] font-bold disabled:opacity-50"
+                        >
+                          {aiSettingsSaving ? "Saving..." : "Save"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleTestGeminiKey}
+                          disabled={aiSettingsSaving || !aiDraft.geminiApiKey.trim()}
+                          className="px-3 py-1.5 rounded bg-secondary border border-border text-[10px] font-bold disabled:opacity-50"
+                        >
+                          Test Key
+                        </button>
+                        {aiSettings?.hasGeminiKey && (
+                          <button
+                            type="button"
+                            onClick={handleClearGeminiKey}
+                            disabled={aiSettingsSaving}
+                            className="px-3 py-1.5 rounded bg-secondary border border-border text-[10px] font-bold text-destructive disabled:opacity-50"
+                          >
+                            Forget Saved Key
+                          </button>
+                        )}
+                        <a
+                          href="https://aistudio.google.com/apikey"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Get a Free Key
+                        </a>
+                      </div>
+
+                      {aiTestMessage && (
+                        <p
+                          className={`text-[10px] font-semibold ${
+                            aiTestMessage.startsWith("OK") ? "text-emerald-500" : "text-destructive"
+                          }`}
+                        >
+                          {aiTestMessage}
+                        </p>
+                      )}
+
+                      <p className="text-[10px] text-muted-foreground">
+                        Free keys are issued at aistudio.google.com/apikey. The key is
+                        stored in chararchive.config.json on this computer and never
+                        uploaded anywhere.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Ollama */}
+                  {aiDraft.provider === "ollama" && (
+                    <div className="space-y-2 rounded-md border border-border/50 bg-card/50 p-3">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                          Local Ollama Server
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleCheckOllama}
+                          disabled={aiSettingsSaving}
+                          className="px-2 py-1 rounded bg-secondary border border-border text-[10px] font-bold disabled:opacity-50"
+                        >
+                          Re-check
+                        </button>
+                      </div>
+
+                      <input
+                        type="text"
+                        value={aiDraft.ollamaBaseUrl}
+                        onChange={(e) =>
+                          setAiDraft((d) => ({ ...d, ollamaBaseUrl: e.target.value }))
+                        }
+                        className="w-full p-2 rounded bg-secondary text-xs border border-border outline-none focus:border-primary font-mono text-foreground"
+                        placeholder="http://127.0.0.1:11434"
+                      />
+
+                      {aiSettings?.ollamaRunning ? (
+                        <>
+                          <p className="text-[10px] text-emerald-500 font-semibold">
+                            Connected to {aiSettings.ollamaBaseUrl} &middot;{" "}
+                            {aiSettings.ollamaModels.length} model
+                            {aiSettings.ollamaModels.length === 1 ? "" : "s"} found
+                          </p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-1">
+                              <label className="block text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">
+                                Vision model (images)
+                              </label>
+                              <select
+                                value={aiDraft.ollamaVisionModel}
+                                onChange={(e) =>
+                                  setAiDraft((d) => ({ ...d, ollamaVisionModel: e.target.value }))
+                                }
+                                className="w-full p-1.5 rounded bg-secondary text-[11px] border border-border"
+                              >
+                                {aiSettings.ollamaModels.map((m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="block text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">
+                                Text model
+                              </label>
+                              <select
+                                value={aiDraft.ollamaTextModel}
+                                onChange={(e) =>
+                                  setAiDraft((d) => ({ ...d, ollamaTextModel: e.target.value }))
+                                }
+                                className="w-full p-1.5 rounded bg-secondary text-[11px] border border-border"
+                              >
+                                {aiSettings.ollamaModels.map((m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-[10px] text-amber-500 font-semibold">
+                          No Ollama server answered. Start Ollama, then press Re-check.
+                        </p>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={handleSaveAiSettings}
+                        disabled={aiSettingsSaving}
+                        className="px-3 py-1.5 rounded bg-primary text-primary-foreground text-[10px] font-bold disabled:opacity-50"
+                      >
+                        {aiSettingsSaving ? "Saving..." : "Save"}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Ollama notice when not the active provider */}
+                  {aiDraft.provider !== "ollama" && aiSettings?.ollamaRunning && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Ollama detected on {aiSettings.ollamaBaseUrl} with{" "}
+                      {aiSettings.ollamaModels.length} model
+                      {aiSettings.ollamaModels.length === 1 ? "" : "s"} available.
+                    </p>
+                  )}
+                </div>
+
                 <div className="p-4 bg-primary/5 rounded-lg border border-primary/20 space-y-3 mt-4">
                   <div className="flex items-center gap-2 text-sm font-semibold text-primary">
                     <FileText className="w-4 h-4 text-primary" />

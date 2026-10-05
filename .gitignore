@@ -6,3 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local AI keys and preferences saved from inside the app. Never commit these.
+chararchive.config.json
+
+# Scratch folder created by uploads during analysis
+temp_uploads/
+
+# One-off patch scripts retired during the 2026 cleanup
+_scripts_archive/
