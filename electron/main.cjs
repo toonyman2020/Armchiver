@@ -23,6 +23,17 @@ function appRoot() {
   return path.join(process.resourcesPath, "app.asar.unpacked");
 }
 
+/**
+ * Where the trimmed runtime dependencies live.
+ *
+ * In development that is the repo's own node_modules. In a packaged build the
+ * full tree is not shipped, so the staged subset sits under resources/runtime.
+ */
+function runtimeModules() {
+  if (!app.isPackaged) return path.join(appRoot(), "node_modules");
+  return path.join(process.resourcesPath, "runtime", "node_modules");
+}
+
 let mainWindow = null;
 let serverProcess = null;
 
@@ -60,6 +71,10 @@ function startServer() {
     return;
   }
 
+  // The server bundle keeps its npm dependencies external, so point Node at
+  // wherever those packages actually live in this installation.
+  const modules = runtimeModules();
+
   serverProcess = fork(bundle, [], {
     cwd: root,
     env: {
@@ -68,6 +83,11 @@ function startServer() {
       NODE_ENV: "production",
       PORT: String(SERVER_PORT),
       ELECTRON_RUN_AS_NODE: "1",
+      NODE_PATH: modules,
+      CHARARCHIVE_MODULES: modules,
+      // The React bundle stays inside app.asar, so hand the server the real
+      // location rather than letting it guess from the working directory.
+      CHARARCHIVE_DIST: path.join(app.getAppPath(), "dist"),
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });

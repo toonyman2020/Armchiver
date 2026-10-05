@@ -15,3 +15,10 @@ temp_uploads/
 
 # One-off patch scripts retired during the 2026 cleanup
 _scripts_archive/
+
+# Packaging output
+release/
+
+# Staged runtime dependencies for the packaged app
+build/
+

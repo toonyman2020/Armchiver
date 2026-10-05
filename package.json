@@ -9,7 +9,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --banner:js=\"require('module').globalPaths.push(process.env.CHARARCHIVE_MODULES||'');require('module').Module._initPaths();\" --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
@@ -32,12 +32,19 @@
       "package.json",
       "firebase-applet-config.json",
       "firebase-blueprint.json",
-      "node_modules/**/*"
+      "!node_modules/**/*",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "build/runtime/node_modules",
+        "to": "runtime/node_modules",
+        "filter": ["**/*"]
+      }
     ],
     "asarUnpack": [
       "dist/server.cjs",
-      "dist/server.cjs.map",
-      "node_modules/**/*"
+      "dist/server.cjs.map"
     ],
     "win": {
       "target": [

@@ -2,10 +2,20 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import AdmZip from 'adm-zip';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import multer from 'multer';
 import { google } from 'googleapis';
+
+// Vite is only needed by the dev middleware below, and it is heavy. Loading it
+// lazily keeps the production bundle (and the packaged app) from having to ship
+// it at all.
+let createViteServer: typeof import('vite').createServer | null = null;
+async function loadVite() {
+  if (!createViteServer) {
+    ({ createServer: createViteServer } = await import('vite'));
+  }
+  return createViteServer!;
+}
 
 // Use disk storage to prevent out-of-memory crashes
 const upload = multer({
@@ -1701,17 +1711,25 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
   });
 
   // Always serve local character assets so exports work correctly in dev and production
-  app.use('/src/assets/images', express.static(path.join(process.cwd(), 'src/assets/images')));
+  const assetsRoot = process.env.CHARARCHIVE_DIST
+    ? path.join(process.env.CHARARCHIVE_DIST, 'assets')
+    : path.join(process.cwd(), 'src');
+  app.use('/src/assets/images', express.static(path.join(assetsRoot, 'assets/images')));
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
+    const createServer = await loadVite();
+    const vite = await createServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // In a packaged app the React bundle lives inside app.asar, which Node can
+    // read but only via Electron's asar-aware fs shim. The Electron main
+    // process therefore passes an explicit path in CHARARCHIVE_DIST, and we fall
+    // back to the working directory for a plain `node dist/server.cjs` run.
+    const distPath = process.env.CHARARCHIVE_DIST || path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
