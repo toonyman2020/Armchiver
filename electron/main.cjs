@@ -37,8 +37,15 @@ function runtimeModules() {
 let mainWindow = null;
 let serverProcess = null;
 
-/** Poll the server until it answers so the window never loads a dead page. */
-async function waitForServer(timeoutMs = 30000) {
+/**
+ * Poll the server until it answers so the window never loads a dead page.
+ *
+ * A cold start loads a few hundred megabytes of dependencies off disk and can
+ * legitimately take over 30 seconds on a spinning disk or a busy USB drive, so
+ * the default budget is generous. The extra time costs nothing on a warm start,
+ * where the first successful poll lands within a couple of seconds.
+ */
+async function waitForServer(timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const ok = await new Promise((resolve) => {
@@ -47,7 +54,7 @@ async function waitForServer(timeoutMs = 30000) {
         resolve(res.statusCode === 200);
       });
       req.on("error", () => resolve(false));
-      req.setTimeout(1500, () => {
+      req.setTimeout(2000, () => {
         req.destroy();
         resolve(false);
       });
@@ -56,6 +63,27 @@ async function waitForServer(timeoutMs = 30000) {
     await new Promise((r) => setTimeout(r, 250));
   }
   return false;
+}
+
+/**
+ * Is something already listening on the port?
+ *
+ * Used only to explain a failed start accurately. A busy port and a slow start
+ * look identical from the outside, but the remedies are completely different,
+ * so they must not be reported with the same message.
+ */
+function portInUse() {
+  const net = require("net");
+  return new Promise((resolve) => {
+    const probe = net.connect({ host: "127.0.0.1", port: SERVER_PORT });
+    const done = (result) => {
+      probe.destroy();
+      resolve(result);
+    };
+    probe.setTimeout(2000, () => done(false));
+    probe.on("connect", () => done(true));
+    probe.on("error", () => done(false));
+  });
 }
 
 function startServer() {
@@ -245,7 +273,7 @@ if (!app.requestSingleInstanceLock()) {
 
     if (DEV_URL) {
       // In dev the Vite server is already running; just wait for it.
-      const ready = await waitForServer(30000);
+      const ready = await waitForServer(120000);
       if (!ready) {
         dialog.showErrorBox(
           "CharArchive could not start",
@@ -261,13 +289,34 @@ if (!app.requestSingleInstanceLock()) {
 
       if (!alreadyUp) {
         startServer();
-        const ready = await waitForServer(30000);
+
+        // Generous budget: a cold start reads a few hundred megabytes of
+        // dependencies off disk, which is slow the first time each day.
+        const ready = await waitForServer(120000);
+
         if (!ready) {
-          dialog.showErrorBox(
-            "CharArchive could not start",
-            `The local server did not respond on port ${SERVER_PORT}.\n\n` +
-              `Another program may be using that port.`
-          );
+          // A port clash and a slow start look identical from out here, but the
+          // fix is not. Only blame the port when something is genuinely
+          // sitting on it.
+          const busy = await portInUse();
+          if (busy) {
+            dialog.showErrorBox(
+              "CharArchive could not start",
+              `Port ${SERVER_PORT} is already in use by another program, so its own\n` +
+                `server could not open the port.\n\n` +
+                `Close whatever is using port ${SERVER_PORT} and start CharArchive again.\n` +
+                `To use a different port, set PORT in the .env file next to the app.`
+            );
+          } else {
+            dialog.showErrorBox(
+              "CharArchive could not start",
+              `CharArchive's local server did not finish starting within two minutes.\n\n` +
+                `This usually means the disk is slow or busy. Wait a moment and try\n` +
+                `again. If it keeps happening, run:\n\n` +
+                `  npm start\n\n` +
+                `from the app folder to see the error on screen.`
+            );
+          }
           app.quit();
           return;
         }
