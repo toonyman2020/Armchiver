@@ -76,10 +76,17 @@ const DEFAULT_AI_CONFIG: AIConfig = {
   ollamaTextModel: 'dolphin-llama3:8b',
 };
 
+// Windows editors routinely write a UTF-8 BOM, which JSON.parse rejects, so
+// strip it before parsing.
+function readJsonFile(file: string): any {
+  const text = fs.readFileSync(file, 'utf-8').replace(/^\uFEFF/, '');
+  return JSON.parse(text);
+}
+
 function loadAIConfig(): AIConfig {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
-      const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+      const raw = readJsonFile(CONFIG_PATH);
       return { ...DEFAULT_AI_CONFIG, ...(raw.ai || {}) };
     }
   } catch (err) {
@@ -92,7 +99,7 @@ function saveAIConfig(cfg: AIConfig) {
   let existing: any = {};
   try {
     if (fs.existsSync(CONFIG_PATH)) {
-      existing = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+      existing = readJsonFile(CONFIG_PATH);
     }
   } catch (err) {
     console.error('Could not parse existing config, starting fresh:', err);
