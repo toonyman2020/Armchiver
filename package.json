@@ -29,6 +29,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "public/**/*",
+      "src/assets/**/*",
       "package.json",
       "firebase-applet-config.json",
       "firebase-blueprint.json",
@@ -44,7 +46,8 @@
     ],
     "asarUnpack": [
       "dist/server.cjs",
-      "dist/server.cjs.map"
+      "dist/server.cjs.map",
+      "src/assets/**/*"
     ],
     "win": {
       "target": [

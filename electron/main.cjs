@@ -88,6 +88,9 @@ function startServer() {
       // The React bundle stays inside app.asar, so hand the server the real
       // location rather than letting it guess from the working directory.
       CHARARCHIVE_DIST: path.join(app.getAppPath(), "dist"),
+      // Seed data references character artwork by a /src/assets/images/... URL.
+      // app.asar.unpacked holds a copy so the server can serve it directly.
+      CHARARCHIVE_IMAGES: appRoot(),
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });

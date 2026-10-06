@@ -1711,10 +1711,18 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
   });
 
   // Always serve local character assets so exports work correctly in dev and production
-  const assetsRoot = process.env.CHARARCHIVE_DIST
-    ? path.join(process.env.CHARARCHIVE_DIST, 'assets')
-    : path.join(process.cwd(), 'src');
-  app.use('/src/assets/images', express.static(path.join(assetsRoot, 'assets/images')));
+  // Character artwork referenced by seed data as /src/assets/images/... is
+// handled by Vite in development, which rewrites those URLs into hashed build
+// assets. Serve the originals as a fallback so the path survives in a
+// production build too, and resolve from app.asar when packaged.
+  const localImages = path.join(process.cwd(), 'src/assets/images');
+  const packagedImages = process.env.CHARARCHIVE_IMAGES
+    ? path.join(process.env.CHARARCHIVE_IMAGES, 'src/assets/images')
+    : null;
+  app.use('/src/assets/images', express.static(localImages));
+  if (packagedImages) {
+    app.use('/src/assets/images', express.static(packagedImages));
+  }
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {

@@ -11,15 +11,15 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
         workbox: {
           maximumFileSizeToCacheInBytes: 5000000 // 5MB limit
         },
         manifest: {
-          name: 'Catti Cango',
-          short_name: 'Catti Cango',
-          description: 'Catti Cango Archive Explorer',
-          theme_color: '#ffffff',
+          name: 'CharArchive',
+          short_name: 'CharArchive',
+          description: 'Character and asset archive for Armentero Studios',
+          theme_color: '#2c3458',
           icons: [
             {
               src: 'pwa-192x192.png',

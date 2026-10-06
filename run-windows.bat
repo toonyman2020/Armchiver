@@ -1,17 +1,17 @@
 @echo off
-title Catti Cango - Windows Local Launcher
+title CharArchive - Windows Launcher
 color 0B
 cls
 
 echo =======================================================================
-echo          ____      _   _   _    ____                                
-echo         / ___|__ _^| ^|_^| ^|_^| ^|  / ___| __ _ _ __   __ _  ___         
-echo        ^| ^|   / _` ^| __^| __^| ^| ^| ^|   / _` ^| '_ \ / _` ^|/ _ \        
-echo        ^| ^|___^| (_^| ^| ^|_^| ^|_^| ^| ^| ^|___^| (_^| ^| ^| ^| ^| (_^| ^| (_) ^|       
-echo         \____\__,_^|\__^|\__^|_^|  \____\__,_^|_^| ^|_^|\__, ^|\___/        
-echo                                                 ^|___/               
+echo   ___ _                _     _                            _
+echo  / __| |__ _ _ __ _  | |__ | |_     __ _ _ __ __ _  ___| |_
+echo  \__ \ '_ \ '_ \ '_ \| '_ \|  _|   / _` | '__/ _` |/ _ \ __|
+echo  |___/| | | | | | | | |_) | | | | | (_| | | | (_| |  __/ |_
+echo       |_| |_| |_| |_| |_.__/|_| |_|  \__,_|_|  \__, |\___|\__|
+echo                                                 |___/
 echo =======================================================================
-echo           WINDOWS NATIVE DESKTOP OFFLINE & LOCAL LAUNCHER
+echo            WINDOWS DESKTOP LAUNCHER
 echo =======================================================================
 echo.
 
@@ -21,7 +21,7 @@ where node >nul 2>&1
 if %errorlevel% neq 0 (
     color 0C
     echo ERROR: Node.js was not found on your Windows system.
-    echo To run Catti Cango locally, please download and install Node.js:
+    echo To run CharArchive locally, please download and install Node.js:
     echo --^> https://nodejs.org/ (LTS version recommended)
     echo.
     echo After installing, please restart this launcher.
@@ -36,21 +36,16 @@ echo.
 echo [2/5] Checking configuration files...
 if not exist .env (
     echo -- Creating a local .env configuration file...
-    echo # Catti Cango Local Configuration > .env
+    echo # CharArchive local configuration > .env
     echo PORT=3000 >> .env
     echo NODE_ENV=production >> .env
-    echo # Paste your Google Gemini API Key below to enable AI analysis locally >> .env
-    echo GEMINI_API_KEY= >> .env
-    echo.
-    echo   ==============================================================
-    echo   IMPORTANT: To use AI image/text analysis, please open the
-    echo   newly created ".env" file in Notepad and paste your 
-    echo   Google Gemini API Key inside: GEMINI_API_KEY=your_key_here
-    echo   ==============================================================
+    echo HOST=127.0.0.1 >> .env
     echo.
 ) else (
     echo -- Local .env configuration file detected.
 )
+echo -- The AI key is no longer set here: open the app, go to Menu, then the
+echo    developer panel (PIN 000) and use AI Engine Settings.
 echo.
 
 :: 3. Install NPM dependencies
@@ -77,15 +72,11 @@ if %errorlevel% neq 0 (
 echo -- Production build completed successfully!
 echo.
 
-:: 5. Open Browser and Launch Server
-echo [5/5] Launching Catti Cango on Windows!
-echo -- Your default web browser will open http://localhost:3000 in a few seconds...
+:: 5. Launch the desktop app
+echo [5/5] Launching CharArchive...
+echo -- A desktop window will open. No browser needed.
 echo.
 
-:: Start browser after 2 seconds delay
-start "" http://localhost:3000
-
-:: Start Express server
-call npm run start
+call npm run electron:start
 
 pause
