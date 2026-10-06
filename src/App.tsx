@@ -673,6 +673,14 @@ export default function App() {
   const [aiSettingsSaving, setAiSettingsSaving] = useState(false);
   const [aiTestMessage, setAiTestMessage] = useState<string>("");
 
+  // Local model inventory and readiness
+  const [aiStatus, setAiStatus] = useState<any>(null);
+  const [aiLocalModels, setAiLocalModels] = useState<any[]>([]);
+  const [aiServerRunning, setAiServerRunning] = useState(false);
+  const [aiOllamaUrl, setAiOllamaUrl] = useState<string | null>(null);
+  const [aiModelsLoading, setAiModelsLoading] = useState(false);
+  const [aiBusyModel, setAiBusyModel] = useState<string | null>(null);
+
   const loadAiSettings = useCallback(async () => {
     setAiSettingsLoading(true);
     try {
@@ -695,6 +703,59 @@ export default function App() {
       setAiSettingsLoading(false);
     }
   }, []);
+
+  const loadAiStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/ai/status");
+      const json = await res.json();
+      if (json.success) setAiStatus(json);
+    } catch (e) {
+      console.error("Failed to read AI status:", e);
+    }
+  }, []);
+
+  const loadAiModels = useCallback(async () => {
+    setAiModelsLoading(true);
+    try {
+      const res = await fetch("/api/ai/models");
+      const json = await res.json();
+      setAiLocalModels(json.models || []);
+      setAiServerRunning(Boolean(json.serverRunning));
+      setAiOllamaUrl(json.ollamaUrl || null);
+    } catch (e) {
+      console.error("Failed to list local models:", e);
+      setAiLocalModels([]);
+      setAiServerRunning(false);
+    } finally {
+      setAiModelsLoading(false);
+    }
+  }, []);
+
+  // Ollama loads weights on first use, so a model can be installed but not
+  // resident. Warming it here moves that wait out of the user's first analysis.
+  const handleModelAction = async (name: string, action: "load" | "unload") => {
+    setAiBusyModel(name);
+    setAiTestMessage("");
+    try {
+      const res = await fetch(`/api/ai/models/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: name }),
+      });
+      const json = await res.json();
+      setAiTestMessage(
+        json.success
+          ? `OK: ${name} ${action === "load" ? "loaded into memory" : "released"}.`
+          : `Failed: ${json.error || "unknown error"}`
+      );
+      await loadAiModels();
+      await loadAiStatus();
+    } catch (e: any) {
+      setAiTestMessage(`Failed: ${e?.message || e}`);
+    } finally {
+      setAiBusyModel(null);
+    }
+  };
 
   const handleSaveAiSettings = async () => {
     setAiSettingsSaving(true);
@@ -771,7 +832,9 @@ export default function App() {
 
   useEffect(() => {
     loadAiSettings();
-  }, [loadAiSettings]);
+    loadAiStatus();
+    loadAiModels();
+  }, [loadAiSettings, loadAiStatus, loadAiModels]);
 
   const fetchBackupData = async () => {
     setBackupLoading(true);
@@ -5630,11 +5693,20 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                                 }
                                 className="w-full p-1.5 rounded bg-secondary text-[11px] border border-border"
                               >
-                                {aiSettings.ollamaModels.map((m) => (
-                                  <option key={m} value={m}>
-                                    {m}
-                                  </option>
-                                ))}
+                                {aiLocalModels.length ? (
+                                  aiLocalModels.map((m: any) => (
+                                    <option key={m.name} value={m.name}>
+                                      {m.name}
+                                      {m.loaded ? " (ready)" : ""}
+                                    </option>
+                                  ))
+                                ) : (
+                                  aiSettings.ollamaModels.map((m: string) => (
+                                    <option key={m} value={m}>
+                                      {m}
+                                    </option>
+                                  ))
+                                )}
                               </select>
                             </div>
                             <div className="space-y-1">
@@ -5648,13 +5720,102 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                                 }
                                 className="w-full p-1.5 rounded bg-secondary text-[11px] border border-border"
                               >
-                                {aiSettings.ollamaModels.map((m) => (
-                                  <option key={m} value={m}>
-                                    {m}
-                                  </option>
-                                ))}
+                                {aiLocalModels.length ? (
+                                  aiLocalModels.map((m: any) => (
+                                    <option key={m.name} value={m.name}>
+                                      {m.name}
+                                      {m.loaded ? " (ready)" : ""}
+                                    </option>
+                                  ))
+                                ) : (
+                                  aiSettings.ollamaModels.map((m: string) => (
+                                    <option key={m} value={m}>
+                                      {m}
+                                    </option>
+                                  ))
+                                )}
                               </select>
                             </div>
+                          </div>
+
+                          {/* Inventory: what is installed, and what is resident. */}
+                          <div className="space-y-1.5 border-t border-border/40 pt-2.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                Installed Models
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  loadAiModels();
+                                  loadAiStatus();
+                                }}
+                                disabled={aiModelsLoading}
+                                className="text-[9px] px-2 py-0.5 rounded bg-secondary border border-border font-bold disabled:opacity-50"
+                              >
+                                {aiModelsLoading ? "Refreshing..." : "Refresh"}
+                              </button>
+                            </div>
+
+                            {aiStatus && (
+                              <p
+                                className={`text-[10px] font-semibold ${
+                                  aiStatus.ready ? "text-emerald-500" : "text-amber-500"
+                                }`}
+                              >
+                                {aiStatus.detail}
+                              </p>
+                            )}
+
+                            {aiLocalModels.length === 0 ? (
+                              <p className="text-[10px] text-muted-foreground">
+                                No models found. Check that Ollama is running and that
+                                OLLAMA_MODELS points at the folder holding your models.
+                              </p>
+                            ) : (
+                              <div className="space-y-1">
+                                {aiLocalModels.map((m: any) => (
+                                  <div
+                                    key={m.name}
+                                    className="flex items-center justify-between gap-2 p-1.5 rounded bg-secondary/60 border border-border/50"
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="text-[11px] font-mono truncate">
+                                        {m.name}
+                                      </div>
+                                      <div className="text-[9px] text-muted-foreground">
+                                        {(m.sizeBytes / 1e9).toFixed(1)} GB &middot;{" "}
+                                        {m.loaded ? (
+                                          <span className="text-emerald-500 font-semibold">ready</span>
+                                        ) : (
+                                          <span className="text-amber-500 font-semibold">not loaded</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleModelAction(m.name, m.loaded ? "unload" : "load")
+                                      }
+                                      disabled={aiBusyModel === m.name}
+                                      className="shrink-0 px-2 py-1 rounded text-[9px] font-bold border border-border bg-background hover:border-primary disabled:opacity-50"
+                                    >
+                                      {aiBusyModel === m.name
+                                        ? "Working..."
+                                        : m.loaded
+                                          ? "Release"
+                                          : "Load"}
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <p className="text-[9px] text-muted-foreground">
+                              An installed model that is not loaded reads its weights from disk on
+                              first use, which can add a minute to the first analysis. Load it
+                              here to move that wait to now.
+                            </p>
                           </div>
                         </>
                       ) : (

@@ -5,6 +5,13 @@ import AdmZip from 'adm-zip';
 import { GoogleGenAI } from '@google/genai';
 import multer from 'multer';
 import { google } from 'googleapis';
+import {
+  generate,
+  engineStatus,
+  listLocalModels,
+  loadLocalModel,
+  unloadLocalModel,
+} from './ai-engine';
 
 // Vite is only needed by the dev middleware below, and it is heavy. Loading it
 // lazily keeps the production bundle (and the packaged app) from having to ship
@@ -108,13 +115,70 @@ function saveAIConfig(cfg: AIConfig) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(existing, null, 2), 'utf-8');
 }
 
-// Apply the saved key so all downstream `process.env.GEMINI_API_KEY` checks pass.
+// Apply the saved key so the Gemini key-test endpoint and any remaining legacy
+// reads keep working.
 function applyAIConfig(cfg: AIConfig) {
   if (cfg.geminiApiKey) {
     process.env.GEMINI_API_KEY = cfg.geminiApiKey;
   } else {
     delete process.env.GEMINI_API_KEY;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Engine routing
+//
+// Each analysis route used to build a GoogleGenAI client and call Gemini
+// directly, which meant selecting Local Ollama in the settings panel had no
+// effect on analysis at all. aiClient() keeps the existing call sites working
+// while sending the request to whichever engine is configured.
+// ---------------------------------------------------------------------------
+
+/**
+ * A stand-in for the GoogleGenAI client with the same generateContent shape.
+ * The prompt and inline image are pulled back out of `contents.parts` so each
+ * route can keep building its request exactly as before.
+ */
+function aiClient() {
+  return {
+    models: {
+      generateContent: async (args: any) => {
+        const parts: any[] = args?.contents?.parts || [];
+        const prompt = parts
+          .filter((p: any) => typeof p?.text === 'string')
+          .map((p: any) => p.text)
+          .join('\n\n');
+        const image = parts.find((p: any) => p?.inlineData?.data)?.inlineData?.data;
+
+        const text = await generate({
+          prompt,
+          image,
+          json: args?.config?.responseMimeType === 'application/json',
+        });
+        return { text };
+      },
+    },
+  };
+}
+
+/** Whether the configured engine could plausibly run, checked without a call. */
+function aiAvailable(): boolean {
+  const cfg = loadAIConfig();
+  if (cfg.provider === 'off') return false;
+  if (cfg.provider === 'ollama') return true;
+  return Boolean(cfg.geminiApiKey);
+}
+
+/** A message that says what is actually wrong, rather than always blaming the key. */
+function aiUnavailableReason(): string {
+  const cfg = loadAIConfig();
+  if (cfg.provider === 'off') {
+    return 'AI is disabled. Choose a provider under AI Engine Settings.';
+  }
+  if (cfg.provider === 'ollama') {
+    return 'No local model server answered. Start Ollama, then press Re-check in AI Engine Settings.';
+  }
+  return 'GEMINI_API_KEY is not set. Add a key in AI Engine Settings, or switch to Local Ollama.';
 }
 
 const OLLAMA_FALLBACK_PORTS = [11434, 11435, 11436];
@@ -457,6 +521,52 @@ async function startServer() {
     res.json({ success: true, ...probe });
   });
 
+  // ---- Local model management ---------------------------------------------
+  // Ollama loads weights into memory on first use, so a model that is installed
+  // but not loaded makes the first analysis after a restart very slow. These
+  // routes let the UI show what is ready and warm a model on demand.
+  app.get('/api/ai/status', async (req, res) => {
+    try {
+      res.json({ success: true, ...(await engineStatus()) });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Could not read engine status' });
+    }
+  });
+
+  app.get('/api/ai/models', async (req, res) => {
+    try {
+      const { url, models } = await listLocalModels(
+        String(req.query.ollamaBaseUrl || '') || undefined
+      );
+      res.json({ success: true, serverRunning: Boolean(url), ollamaUrl: url, models });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Could not list models' });
+    }
+  });
+
+  app.post('/api/ai/models/load', async (req, res) => {
+    const name = String(req.body?.model || '').trim();
+    if (!name) return res.status(400).json({ error: 'No model name given.' });
+    try {
+      console.log(`Loading local model ${name} into memory...`);
+      const result = await loadLocalModel(name);
+      console.log(`Local model ${name} is loaded.`);
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Could not load the model' });
+    }
+  });
+
+  app.post('/api/ai/models/unload', async (req, res) => {
+    const name = String(req.body?.model || '').trim();
+    if (!name) return res.status(400).json({ error: 'No model name given.' });
+    try {
+      res.json({ success: true, ...(await unloadLocalModel(name)) });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Could not unload the model' });
+    }
+  });
+
   app.get('/api/backup-source', (req, res) => {
     try {
       const rootFiles = ['server.ts', 'package.json', 'index.html', 'vite.config.ts', 'tsconfig.json', 'metadata.json', '.env.example'];
@@ -544,19 +654,13 @@ async function startServer() {
       const mode = req.body.mode || 'advanced';
       const countingMode = req.body.countingMode || 'multiple';
 
-      if (!process.env.GEMINI_API_KEY) {
-        res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        res.status(500).json({ error: msg });
         return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
       const base64Image = fs.readFileSync(req.file.path).toString('base64');
       // Delete temporary file after reading
       fs.unlinkSync(req.file.path);
@@ -774,19 +878,13 @@ Return the result as a strict JSON object matching this schema exactly:
       const mode = req.body.mode || 'advanced';
       const countingMode = req.body.countingMode || 'multiple';
 
-      if (!process.env.GEMINI_API_KEY) {
-        res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        res.status(500).json({ error: msg });
         return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       let prompt = `Analyze this text and act as an Archive Analyzer.\n`;
       prompt += `
@@ -934,18 +1032,13 @@ ${textContent}
     try {
       const { text = '', mediaFiles = [], mode = 'advanced', countingMode = 'multiple', transcribeMedia = true } = req.body;
 
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        return res.status(500).json({ error: msg });
+        return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       let prompt = `You are an expert Character Data & Media Archive Analyzer.
 Analyze all provided input streams (text notes, dumped images, audio tracks/soundtracks, video clips) and extract comprehensive, structured character profile information.
@@ -1069,18 +1162,13 @@ Return the result as a strict JSON object with this schema:
     try {
       const { pageTitle, characterName, characterDescription, allPages = [], galleryImages = [], audios = [], videos = [], genericFiles = [], currentContent = '' } = req.body;
 
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        return res.status(500).json({ error: msg });
+        return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       let prompt = `You are an expert Character Archive Analyzer and Editor.
 The user is focusing on a specific section/page titled: "${pageTitle}".
@@ -1152,18 +1240,13 @@ Return the result as a strict JSON object with this exact schema:
     try {
       const { instruction, characterName, audios = [], mediaCategories = [] } = req.body;
 
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        return res.status(500).json({ error: msg });
+        return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       let prompt = `You are an expert Audio Archive & Album Organizer for character media.
 Character Name: ${characterName || 'Character'}
@@ -1256,18 +1339,13 @@ Return strict JSON with this exact schema:
         return res.status(400).json({ error: 'Missing media data or mimeType' });
       }
 
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        return res.status(500).json({ error: msg });
+        return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       let cleanBase64 = data;
       if (cleanBase64.includes(',')) {
@@ -1353,18 +1431,13 @@ Return strict JSON:
         return res.status(400).json({ error: 'No text provided' });
       }
 
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        return res.status(500).json({ error: msg });
+        return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       const contents = `You are an expert editor and character bible organizer.
 Analyze the following text and perform these tasks:
@@ -1428,18 +1501,13 @@ ${text}`;
   app.post('/api/generate-profile', async (req, res) => {
     try {
       const { character, prompt } = req.body;
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        return res.status(500).json({ error: msg });
+        return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       const contents = `You are an expert creative writer and character designer.
 Generate a rich, cohesive, and professional creative writing profile for a character based on the provided character details and optional custom instruction.
@@ -1510,18 +1578,13 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
   app.post('/api/generate-description', async (req, res) => {
     try {
       const { character } = req.body;
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        return res.status(500).json({ error: msg });
+        return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       const contents = `You are an expert character biography novelist and story designer.
 Scan the character's profile details provided below and write a beautifully composed, rich, and immersive character description / biography (2-3 paragraphs) that captures their core essence, background, and unique lore. Also generate a catchy, short, and punchy tagline (1 sentence).
@@ -1575,18 +1638,13 @@ Do not include any formatting, markdown wrappers, or explanations outside of the
       if (!command) {
         return res.status(400).json({ error: 'No command provided' });
       }
-      if (!process.env.GEMINI_API_KEY) {
-        return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
+      if (!aiAvailable()) {
+        const msg = aiUnavailableReason();
+        return res.status(500).json({ error: msg });
+        return;
       }
 
-      const ai = new GoogleGenAI({ 
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build'
-          }
-        }
-      });
+      const ai = aiClient();
 
       const contents = `You are an intelligent AI character editor assistant.
 The user has spoken/written an instruction command to update or expand a character's profile details.

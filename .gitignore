@@ -22,3 +22,7 @@ release/
 # Staged runtime dependencies for the packaged app
 build/
 
+
+# Launcher shortcut (generated, carries the app icon)
+*.lnk
+

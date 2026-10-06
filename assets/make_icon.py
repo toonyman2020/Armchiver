@@ -1,25 +1,40 @@
 """
-Generates the CharArchive application icon.
+Generate the CharArchive application icon.
 
-The mark is an archive box with a character head on its label: it reads as
-"character archive" at a glance and stays legible down to 16px in the taskbar.
+The mark is the studio's wooden-mannequin mascot, Artie, set into a circular
+portrait on the app's dark plate. The face is lifted from the artwork the app
+already ships rather than redrawn, so the icon and the mascot never drift apart.
 
 Outputs:
-    assets/icon.png   256x256 master
-    assets/icon.ico   multi-resolution Windows icon
-"""
-from PIL import Image, ImageDraw
-import os
+    assets/icon.png      256x256 master
+    assets/icon.ico      seven standard Windows resolutions
+    public/*             PWA icon set (see make_pwa_icons.py)
 
-SS = 8            # supersample factor for clean edges
-S = 256# final size
+Usage:
+    python assets\\make_icon.py
+"""
+import os
+import sys
+
+from PIL import Image, ImageDraw, ImageFilter
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MASCOT = os.path.join(ROOT, "src", "assets", "images", "wooden_dummy_1786259892970.jpg")
+
+SS = 4                      # supersample factor
+S = 256                    # final icon size
 C = S * SS
 
-TOP = (44, 52, 88)     # deep indigo, matches the app's dark UI
-BOT = (12, 14, 22)     # near-black
-BOX = (233, 238, 248)  # off-white box body
-LID = (150, 200, 255)  # light blue lid
-DARK = (28, 34, 58)    # dark plate / handle
+TOP = (44, 52, 88)         # deep indigo plate, matches the app's dark UI
+BOT = (12, 14, 22)
+RING = (150, 200, 255)     # light blue ring around the portrait
+
+# Square crop around the mascot's head in the 1024x1024 source, in source
+# pixels. Centred on the face (about 507, 283) so the beret is not clipped and
+# the pale paper background does not dominate the circle.
+CROP = (292, 56, 740, 504)
 
 
 def rounded_mask(w, h, radius):
@@ -29,7 +44,6 @@ def rounded_mask(w, h, radius):
 
 
 def vertical_gradient(w, h, top, bot):
-    """Explicit RGBA so the result is opaque; a 3-tuple can come out transparent."""
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     span = max(1, h - 1)
@@ -47,84 +61,76 @@ def vertical_gradient(w, h, top, bot):
     return img
 
 
+def mascot_portrait(diameter):
+    """Circular crop of the mascot's head, sized to fill the ring."""
+    if not os.path.exists(MASCOT):
+        raise SystemExit(
+            f"Mascot artwork not found:\n  {MASCOT}\n"
+            "The icon is generated from this file, so it must be present."
+        )
+
+    src = Image.open(MASCOT).convert("RGB")
+    side = CROP[2] - CROP[0]
+    if side != CROP[3] - CROP[1]:
+        raise SystemExit("CROP must be square so the portrait is not stretched")
+    head = src.crop(CROP).resize((diameter, diameter), Image.LANCZOS)
+
+    # Circular mask, then feather the edge very slightly so it does not look
+    # harshly cut out at small sizes.
+    mask = Image.new("L", (diameter, diameter), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, diameter - 1, diameter - 1], fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(diameter * 0.004))
+
+    portrait = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
+    portrait.paste(head.convert("RGBA"), (0, 0), mask)
+    return portrait
+
+
 def build():
     radius = int(C * 0.22)
-    mask = rounded_mask(C, C, radius)
+    plate = Image.new("RGBA", (C, C), (0, 0, 0, 255))
+    plate.paste(vertical_gradient(C, C, TOP, BOT), (0, 0), rounded_mask(C, C, radius))
 
-    # 1. Dark gradient plate, clipped to the rounded square.
-    img = Image.new("RGBA", (C, C), (0, 0, 0, 255))
-    grad = vertical_gradient(C, C, TOP, BOT)
-    img.paste(grad, (0, 0), mask)
-
-    # 2. Soft top highlight, alpha-blended (not pasted, so it blends).
+    # Soft highlight across the top of the plate.
     hl = Image.new("RGBA", (C, C), (0, 0, 0, 0))
     ImageDraw.Draw(hl).ellipse(
-        [-int(C * 0.35), -int(C * 0.75), int(C * 1.35), int(C * 0.60)],
-        fill=(255, 255, 255, 26),
+        [-int(C * 0.35), -int(C * 0.80), int(C * 1.35), int(C * 0.55)],
+        fill=(255, 255, 255, 22),
     )
-    img = Image.alpha_composite(img, hl)
+    plate = Image.alpha_composite(plate, hl)
+    d = ImageDraw.Draw(plate)
 
-    d = ImageDraw.Draw(img)
+    # Portrait, inset so the ring reads clearly around it.
+    dia = int(C * 0.70)
+    pad = (C - dia) // 2
+    ring_w = max(2, int(C * 0.030))
 
-    # 3. Archive box body.
-    d.rounded_rectangle(
-        [int(C * 0.20), int(C * 0.36), int(C * 0.80), int(C * 0.83)],
-        radius=int(C * 0.055), fill=BOX + (255,),
+    d.ellipse(
+        [pad - ring_w, pad - ring_w, pad + dia + ring_w, pad + dia + ring_w],
+        fill=RING + (255,),
     )
+    plate.paste(mascot_portrait(dia), (pad, pad), mascot_portrait(dia))
 
-    # 4. Lid, a little wider than the body.
-    d.rounded_rectangle(
-        [int(C * 0.155), int(C * 0.255), int(C * 0.845), int(C * 0.375)],
-        radius=int(C * 0.045), fill=LID + (255,),
-    )
-
-    # 5. Handle slot in the lid.
-    d.rounded_rectangle(
-        [int(C * 0.42), int(C * 0.292), int(C * 0.58), int(C * 0.328)],
-        radius=int(C * 0.012), fill=DARK + (255,),
-    )
-
-    # 6. Label plate on the front of the box.
-    px0, py0 = int(C * 0.30), int(C * 0.485)
-    px1, py1 = int(C * 0.70), int(C * 0.685)
-    d.rounded_rectangle(
-        [px0, py0, px1, py1], radius=int(C * 0.022), fill=DARK + (255,)
-    )
-
-    # 7. Character head + shoulders on the label.
-    cx = (px0 + px1) // 2
-    hy = int(C * 0.575)
-    r = int(C * 0.047)
-    d.ellipse([cx - r, hy - r, cx + r, hy + r], fill=BOX + (255,))
-
-    sw, sy = int(C * 0.090), hy + r - int(C * 0.004)
-    d.pieslice([cx - sw, sy, cx + sw, sy + int(C * 0.115)],
-               start=180, end=360, fill=BOX + (255,))
-
-    return img.resize((S, S), Image.LANCZOS)
+    return plate.resize((S, S), Image.LANCZOS)
 
 
 def main():
     icon = build()
 
-    # Fail loudly if the plate is not actually opaque dark, so a broken build
-    # never silently ships a white or transparent icon again. The top of the
-    # plate is lightened by the highlight, so check a lower band that is not.
+    # Fail loudly rather than shipping a blank or white icon.
     probe = icon.convert("RGBA")
-    top = probe.getpixel((128, 20))
-    lower = probe.getpixel((128, 240))
-    assert top[3] == 255, f"top is not opaque: {top}"
-    assert all(c <= 140 for c in top[:3]), f"top is not dark: {top}"
-    assert all(c <= 80 for c in lower[:3]), f"lower plate is not dark: {lower}"
+    corner = probe.getpixel((128, 12))
+    centre = probe.getpixel((128, 128))
+    assert corner[3] == 255 and all(c <= 140 for c in corner[:3]), f"plate is wrong: {corner}"
+    assert sum(centre[:3]) > 150, f"portrait looks empty: {centre}"
 
-    os.makedirs("assets", exist_ok=True)
-    icon.save("assets/icon.png")
+    icon.save(os.path.join(ROOT, "assets", "icon.png"))
     icon.save(
-        "assets/icon.ico",
+        os.path.join(ROOT, "assets", "icon.ico"),
         sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
     )
     print("wrote assets/icon.png and assets/icon.ico")
-    print("plate check  top:", top, " lower:", lower)
+    print(f"plate check {corner} | portrait check {centre}")
 
 
 if __name__ == "__main__":
