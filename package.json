@@ -9,13 +9,17 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --banner:js=\"require('module').globalPaths.push(process.env.CHARARCHIVE_MODULES||'');require('module').Module._initPaths();\" --outfile=dist/server.cjs",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --banner:js=\"require('module').globalPaths.push(process.env.CHARARCHIVE_MODULES||'');require('module').Module._initPaths();\" --outfile=dist/server.cjs",
+    "build:server:commercial": "esbuild server.ts --bundle --minify --platform=node --format=cjs --packages=external --define:__COMMERCIAL__=true --banner:js=\"require('module').globalPaths.push(process.env.CHARARCHIVE_MODULES||'');require('module').Module._initPaths();\" --outfile=dist/server.cjs",
+    "build": "vite build && npm run build:server",
+    "build:commercial": "cross-env CHARARCHIVE_COMMERCIAL=1 vite build && npm run build:server:commercial",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "electron:dev": "electron .",
     "electron:start": "npm run build && electron .",
     "package": "npm run build && electron-builder --win --x64",
+    "package:commercial": "npm run build:commercial && node assets\\stage_runtime_deps.cjs && electron-builder --win --x64 -c.win.artifactName=${productName}-Commercial-${version}.${ext}",
     "package:dir": "npm run build && electron-builder --win --x64 --dir"
   },
   "build": {
@@ -41,7 +45,9 @@
       {
         "from": "build/runtime/node_modules",
         "to": "runtime/node_modules",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asarUnpack": [
@@ -53,7 +59,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icon.ico",
@@ -118,6 +126,7 @@
     "@types/three": "^0.185.4",
     "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.21",
+    "cross-env": "^10.1.0",
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",

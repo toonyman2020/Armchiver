@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { IS_COMMERCIAL } from "./flags";
 import {
   Upload,
   UploadCloud,
@@ -4378,8 +4379,9 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
             </div>
           </aside>
 
-      {/* Creator Modal */}
-      {showCreatorModal && (
+      {/* Creator Modal. Absent from a commercial build, so the developer
+          panels and source export inside it are not shipped at all. */}
+      {!IS_COMMERCIAL && showCreatorModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
           onClick={(e) => {
@@ -6376,14 +6378,16 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
         onClose={() => setIsFeatureHelpOpen(false)}
       />
 
-      {/* Developer Source Code Modal for SDK */}
-      <DeveloperCodeModal
-        isOpen={isDevSdkModalOpen}
-        onClose={() => setIsDevSdkModalOpen(false)}
-      />
+      {/* Developer surfaces. Removed from a commercial build. */}
+      {!IS_COMMERCIAL && (
+        <DeveloperCodeModal
+          isOpen={isDevSdkModalOpen}
+          onClose={() => setIsDevSdkModalOpen(false)}
+        />
+      )}
 
       {/* Developer Modal */}
-      {isDeveloperModalOpen && (
+      {!IS_COMMERCIAL && isDeveloperModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-in fade-in duration-200"
           onClick={(e) => {

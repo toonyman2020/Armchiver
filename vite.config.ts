@@ -5,7 +5,16 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
+  // Set CHARARCHIVE_COMMERCIAL=1 for a build that is meant to be handed to
+  // someone else. It compiles out the developer panels and the source export
+  // instead of merely hiding them, so the code is absent from the shipped
+  // bundle rather than present and unreachable.
+  const commercial = process.env.CHARARCHIVE_COMMERCIAL === '1';
+
   return {
+    define: {
+      __COMMERCIAL__: JSON.stringify(commercial),
+    },
     plugins: [
       react(),
       tailwindcss(),

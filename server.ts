@@ -12,6 +12,7 @@ import {
   loadLocalModel,
   unloadLocalModel,
 } from './ai-engine';
+import { IS_COMMERCIAL } from './src/flags';
 
 // Vite is only needed by the dev middleware below, and it is heavy. Loading it
 // lazily keeps the production bundle (and the packaged app) from having to ship
@@ -567,6 +568,11 @@ async function startServer() {
     }
   });
 
+  // This route returns every source file in the project as text. It is the app's
+  // own backup exporter and is invaluable while developing, but shipping it in a
+  // build you hand to someone else would hand them the source too. A commercial
+  // build removes it entirely rather than hiding it.
+  if (!IS_COMMERCIAL) {
   app.get('/api/backup-source', (req, res) => {
     try {
       const rootFiles = ['server.ts', 'package.json', 'index.html', 'vite.config.ts', 'tsconfig.json', 'metadata.json', '.env.example'];
@@ -600,6 +606,7 @@ async function startServer() {
       res.status(500).json({ error: error.message || 'Error creating backup' });
     }
   });
+  }
 
   app.post('/api/upload-archive', upload.single('archive'), async (req, res) => {
     try {
@@ -630,9 +637,13 @@ async function startServer() {
     }
   });
 
-  app.get('/api/logs', (req, res) => {
-    res.json({ logs: serverLogs });
-  });
+  // Internal request log. Useful while developing, but it exposes paths and
+  // internals, so a commercial build does not serve it.
+  if (!IS_COMMERCIAL) {
+    app.get('/api/logs', (req, res) => {
+      res.json({ logs: serverLogs });
+    });
+  }
 
   app.post('/api/analyze-image', (req, res, next) => {
     console.log('Received analyze-image request');

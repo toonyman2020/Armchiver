@@ -15,6 +15,10 @@ const SERVER_PORT = Number(process.env.PORT) || 3000;
 const SERVER_URL = `http://127.0.0.1:${SERVER_PORT}`;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
 
+// Set by the "package:commercial" script. A build you hand to someone else
+// drops developer affordances such as DevTools.
+const IS_COMMERCIAL_BUILD = process.env.CHARARCHIVE_COMMERCIAL === "1";
+
 // In a packaged build the app lives in resources/app.asar, but the server
 // bundle and node_modules have to be unpacked so they can be required/run
 // from disk. Resolve the real (unpacked) location when packaged.
@@ -227,7 +231,9 @@ function buildMenu() {
         { role: "zoomOut" },
         { type: "separator" },
         { role: "togglefullscreen" },
-        { role: "toggleDevTools" },
+        // DevTools expose the bundled app source. Shipped builds leave the
+        // menu item out; a developer build keeps it.
+        ...(IS_COMMERCIAL_BUILD ? [] : [{ role: "toggleDevTools" }]),
       ],
     },
     {
