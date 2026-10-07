@@ -758,6 +758,42 @@ export default function App() {
     }
   };
 
+  const handleCloseApp = useCallback(async () => {
+    // The character editor holds edits that are not written until Save. Warn
+    // before letting those go.
+    const desktop = (window as any).chararchive;
+
+    if (isEditingCreator || isDeveloperModalOpen) {
+      if (desktop?.confirmClose) {
+        const discard = await desktop.confirmClose(
+          "The editor is open with changes that have not been saved."
+        );
+        if (!discard) return;
+      } else if (!window.confirm("You have unsaved changes. Close anyway?")) {
+        return;
+      }
+    }
+
+    if (desktop?.requestClose) {
+      await desktop.requestClose();
+      return;
+    }
+    window.close();
+  }, [isEditingCreator, isDeveloperModalOpen]);
+
+  // Second line of defence: the window's own close button, keyboard shortcut,
+  // or taskbar close should warn too when the editor holds unsaved work.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isEditingCreator || isDeveloperModalOpen) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isEditingCreator, isDeveloperModalOpen]);
+
   const handleSaveAiSettings = async () => {
     setAiSettingsSaving(true);
     setAiTestMessage("");
@@ -3090,6 +3126,18 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                 >
                   <HelpCircle className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-primary" />
                   <span className="hidden sm:inline">Guide (?)</span>
+                </button>
+
+                {/* Close. On the desktop build this asks whether to keep or
+                    discard in-progress edits, then shuts the local server down
+                    with the window. In a browser it just tries to close the tab. */}
+                <button
+                  onClick={handleCloseApp}
+                  className="h-11 w-11 sm:w-auto sm:px-4 text-xs sm:text-sm font-bold flex items-center justify-center gap-2 rounded-xl border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 transition-all active:scale-95 cursor-pointer shadow-xs"
+                  title="Close CharArchive"
+                >
+                  <X className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+                  <span className="hidden sm:inline">Close</span>
                 </button>
               </div>
             </div>

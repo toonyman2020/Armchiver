@@ -4,10 +4,19 @@ import {
   Volume2, VolumeX, Music, Video, Info, Download, 
   Maximize2, Minimize2, List, Edit3, Save, X, Image as ImageIcon,
   Music2, FileAudio, FileVideo, ChevronDown, ChevronUp, AlertTriangle,
-  Sparkles, RefreshCw, Mic, MicOff, Upload, FolderPlus
+  Sparkles, RefreshCw, Mic, MicOff, Upload, FolderPlus, AlertCircle
 } from 'lucide-react';
 import { Character, AudioMetadata } from '../types';
 import { ID3Writer } from 'browser-id3-writer';
+
+/**
+ * Ceiling for sending a media file to the transcriber.
+ *
+ * The file is base64-encoded for the request, which adds roughly a third to its
+ * size and holds several copies in memory at once. Without a cap, opening a
+ * large video exhausted the renderer's memory and closed the window outright.
+ */
+const MAX_TRANSCRIBE_BYTES = 40 * 1024 * 1024;
 
 interface UnifiedMediaPlayerProps {
   character: Character;
@@ -23,6 +32,7 @@ export const UnifiedMediaPlayer: React.FC<UnifiedMediaPlayerProps> = ({
   onNavigateToPage
 }) => {
   const [activeType, setActiveType] = useState<'audio' | 'video'>(initialType);
+  const [transcribeError, setTranscribeError] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isShuffle, setIsShuffle] = useState(false);
@@ -60,18 +70,40 @@ export const UnifiedMediaPlayer: React.FC<UnifiedMediaPlayerProps> = ({
   const handleTranscribeCurrentTrack = async () => {
     if (!currentItem) return;
     setIsTranscribing(true);
+    setTranscribeError(null);
     try {
       let base64 = currentItem.src;
       let mimeType = activeType === 'audio' ? 'audio/mp3' : 'video/mp4';
 
       if (!base64.startsWith('data:')) {
+        // Fetch as a blob and refuse anything large before it is turned into
+        // base64. Reading a whole video into a data URL inflates it by about a
+        // third and was enough to exhaust the renderer's memory and take the
+        // window down, so the cap is well under what a typical video weighs.
         const res = await fetch(currentItem.src);
+        if (!res.ok) throw new Error(`Could not open the media file (HTTP ${res.status}).`);
+
+        const declared = Number(res.headers.get('content-length') || '0');
+        if (declared && declared > MAX_TRANSCRIBE_BYTES) {
+          throw new Error(
+            `That file is ${(declared / 1e6).toFixed(0)} MB, which is too large to transcribe. ` +
+              `The limit is ${(MAX_TRANSCRIBE_BYTES / 1e6).toFixed(0)} MB.`
+          );
+        }
+
         const blob = await res.blob();
+        if (blob.size > MAX_TRANSCRIBE_BYTES) {
+          throw new Error(
+            `That file is ${(blob.size / 1e6).toFixed(0)} MB, which is too large to transcribe. ` +
+              `The limit is ${(MAX_TRANSCRIBE_BYTES / 1e6).toFixed(0)} MB.`
+          );
+        }
+
         mimeType = blob.type || mimeType;
         base64 = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
+          reader.onerror = () => reject(new Error('Could not read the media file.'));
           reader.readAsDataURL(blob);
         });
       }
@@ -121,8 +153,11 @@ export const UnifiedMediaPlayer: React.FC<UnifiedMediaPlayerProps> = ({
         onUpdateCharacter(updatedChar);
         setShowLyrics(true);
       }
-    } catch (err) {
+    } catch (err: any) {
+      // Surface the reason instead of only logging it, so a refusal such as
+      // "file too large" is visible rather than looking like nothing happened.
       console.error('Transcription error:', err);
+      setTranscribeError(err?.message || 'Could not transcribe this file.');
     } finally {
       setIsTranscribing(false);
     }
@@ -528,6 +563,23 @@ export const UnifiedMediaPlayer: React.FC<UnifiedMediaPlayerProps> = ({
                   onTimeUpdate={handleTimeUpdate}
                   onEnded={handleMediaEnd}
                   onLoadedMetadata={handleTimeUpdate}
+                  onError={(e) => {
+                    // A codec the renderer cannot decode, or a missing file,
+                    // fires here rather than throwing. Report it instead of
+                    // leaving a blank frame with no explanation.
+                    const el = e.currentTarget;
+                    const code = el?.error?.code;
+                    const reason =
+                      code === 4
+                        ? 'This video format is not supported. Try an MP4 in H.264.'
+                        : code === 3
+                          ? 'That video could not be decoded.'
+                          : code === 2
+                            ? 'That video file could not be found.'
+                            : 'That video could not be played.';
+                    console.error('Video playback error:', code, el?.error?.message);
+                    setTranscribeError(reason);
+                  }}
                   playsInline
                   onClick={togglePlay}
                 />
@@ -571,6 +623,16 @@ export const UnifiedMediaPlayer: React.FC<UnifiedMediaPlayerProps> = ({
                     {isTranscribing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                     <span className="text-[11px] font-bold">{isTranscribing ? 'Transcribing...' : 'AI Transcribe'}</span>
                   </button>
+                  {transcribeError && (
+                    <button
+                      onClick={() => setTranscribeError(null)}
+                      title={transcribeError}
+                      className="max-w-[190px] px-2.5 py-1.5 bg-red-600/90 text-white text-[11px] font-bold rounded-full border border-red-400/30 shadow-md flex items-center gap-1 cursor-pointer"
+                    >
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{transcribeError}</span>
+                    </button>
+                  )}
                   <button 
                     onClick={() => setShowMetadataEditor(true)}
                     className="p-2 bg-black/60 backdrop-blur-md text-white/90 hover:text-white rounded-full border border-white/10 transition-colors cursor-pointer"

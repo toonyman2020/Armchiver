@@ -5,7 +5,7 @@
  * pointed at it. Nothing in the React app had to change: it still talks to
  * localhost over HTTP exactly as it does in a browser.
  */
-const { app, BrowserWindow, shell, dialog, Menu } = require("electron");
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
@@ -262,6 +262,52 @@ function buildMenu() {
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// The in-app Close button asks for this rather than calling window.close(),
+// so the same shutdown path runs and the local server is stopped with it.
+ipcMain.handle("app:request-close", async () => {
+  const target = BrowserWindow.getAllWindows()[0] || mainWindow;
+  if (!target) {
+    app.quit();
+    return { closed: true };
+  }
+
+  const { response } = await dialog.showMessageBox(target, {
+    type: "question",
+    buttons: ["Save and Close", "Close without Saving", "Cancel"],
+    defaultId: 0,
+    cancelId: 2,
+    title: "Close CharArchive",
+    message: "Close CharArchive?",
+    detail:
+      "Your characters and media are saved automatically as you work, so you\n" +
+      "will not normally lose anything.\n\n" +
+      "Close without saving if you want to discard the most recent edits.",
+  });
+
+  if (response === 2) return { closed: false };
+
+  app.isQuitting = true;
+  stopServer();
+  target.close();
+  if (BrowserWindow.getAllWindows().length === 0) app.quit();
+  return { closed: true };
+});
+
+// Used by the renderer to ask before discarding in-progress edits.
+ipcMain.handle("app:confirm-close", async (_event, message) => {
+  const target = BrowserWindow.getAllWindows()[0] || mainWindow;
+  const { response } = await dialog.showMessageBox(target, {
+    type: "warning",
+    buttons: ["Keep Working", "Close Anyway"],
+    defaultId: 0,
+    cancelId: 0,
+    title: "Unsaved work",
+    message: message || "You have edits that have not been saved yet.",
+    detail: "Closing now discards them.",
+  });
+  return response === 1;
+});
 
 // One instance only, so two copies cannot fight over the port.
 if (!app.requestSingleInstanceLock()) {
