@@ -53,7 +53,10 @@ const CONFIG_PATH = path.join(process.cwd(), "chararchive.config.json");
 const OLLAMA_PORTS = [11434, 11435, 11436];
 
 const DEFAULTS: AIConfig = {
-  provider: "gemini",
+  // Local first. A fresh install used to default to Gemini with no key, so the
+  // very first analysis failed with "GEMINI_API_KEY is not set" even on a
+  // machine with perfectly good local models sitting in Ollama.
+  provider: "ollama",
   geminiApiKey: "",
   ollamaBaseUrl: "http://127.0.0.1:11434",
   ollamaVisionModel: "qwen2.5vl:7b",
@@ -208,6 +211,9 @@ function withTimeout(ms: number, label: string) {
   );
 }
 
+/** Substrings that mark a model as able to accept images. */
+const VISION_HINTS = ["vl", "vision", "llava", "bakllava", "moondream", "minicpm-v", "gemma3"];
+
 async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string> {
   const url = await resolveOllamaUrl(cfg.ollamaBaseUrl);
   if (!url) {
@@ -216,25 +222,62 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
     );
   }
 
-  // A vision model is required when an image is attached.
-  const model = opts.image ? cfg.ollamaVisionModel : cfg.ollamaTextModel;
+  const preferred = opts.image ? cfg.ollamaVisionModel : cfg.ollamaTextModel;
+
+  // Prefer the configured model, but fall back to whatever is actually
+  // installed. Hard-failing on a name would make the app look broken after a
+  // model is renamed, removed, or simply never downloaded, when another
+  // perfectly capable model is sitting right there.
+  let model = preferred;
+  try {
+    const { models } = await listLocalModels(url);
+    const names = models.map((m) => m.name);
+
+    if (!names.includes(preferred)) {
+      const candidates = opts.image ? names.filter((n) => VISION_HINTS.some((h) => n.includes(h))) : names;
+      if (candidates.length) {
+        model = candidates[0];
+        console.log(
+          `Local model "${preferred}" is not installed. Using "${model}" instead.`
+        );
+      } else if (names.length) {
+        model = names[0];
+      } else {
+        throw new Error(
+          opts.image
+            ? "No local model that accepts images is installed. Load a vision model such as qwen2.5vl:7b."
+            : "No local models are installed. Pull one, then press Refresh in AI Engine Settings."
+        );
+      }
+    }
+  } catch (err: any) {
+    // A listing failure should not block the request; let the call itself try.
+    if (!/No local model|No local models/.test(err?.message || "")) {
+      console.log("Could not list local models:", err?.message || err);
+    } else {
+      throw err;
+    }
+  }
 
   const body: Record<string, unknown> = {
     model,
-    messages: [{ role: "user", content: opts.prompt }],
+    // /api/generate rather than /api/chat. qwen2.5vl answers image prompts
+    // correctly on /api/generate, while /api/chat returns an empty message with
+    // done_reason "load" against this model's chat template. Every prompt here
+    // is a single instruction, so the chat wrapper buys nothing.
+    prompt: opts.prompt,
     stream: false,
     // Hold the weights between requests so repeat analyses stay responsive.
     keep_alive: "10m",
   };
   if (opts.image) body.images = [opts.image];
-  // Ollama enforces a JSON schema natively, which keeps local output as
-  // parseable as Gemini's responseMimeType does.
+  // Ollama enforces JSON natively, matching Gemini's responseMimeType.
   if (opts.json) body.format = "json";
 
   const timeout = opts.timeoutMs ?? 600000;
   const payload = JSON.stringify(body);
   const result = await Promise.race([
-    fetchJson<any>(`${url}/api/chat`, {
+    fetchJson<any>(`${url}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
@@ -242,8 +285,14 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
     withTimeout(timeout, `Local model "${model}"`),
   ]);
 
-  const text = result?.message?.content;
-  if (!text) throw new Error(`Local model "${model}" returned an empty response.`);
+  const text = result?.response;
+  if (!text) {
+    throw new Error(
+      `Local model "${model}" returned an empty response` +
+        (result?.done_reason ? ` (done_reason: ${result.done_reason})` : "") +
+        "."
+    );
+  }
   return text;
 }
 
