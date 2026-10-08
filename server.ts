@@ -123,10 +123,15 @@ function aiClient() {
           throw new Error('The request had no text to send to the AI engine.');
         }
 
+        const inlineMime = parts.find((p: any) => p?.inlineData?.mimeType)?.inlineData?.mimeType;
+
         const text = await generate({
           prompt,
           image,
           json: args?.config?.responseMimeType === 'application/json',
+          // Audio and video travel the same path as stills, so error messages
+          // need to be able to tell the user which kind of file they uploaded.
+          media: typeof inlineMime === 'string' && !inlineMime.startsWith('image/'),
         });
         return { text };
       },
@@ -1384,6 +1389,23 @@ Return strict JSON with this exact schema:
 
       if (!data || !mimeType) {
         return res.status(400).json({ error: 'Missing media data or mimeType' });
+      }
+
+      // Base64 arrives inside the JSON body, so the request can be far larger
+      // than the media itself. The player checks this limit before uploading,
+      // but a large file sent another way would be decoded, base64 expanded by
+      // a third again, and handed to the model as one enormous prompt. That is
+      // what made big videos crash the app rather than fail. Enforce it here so
+      // the limit belongs to the endpoint and not only to the screen.
+      const MAX_MEDIA_BYTES = 40 * 1024 * 1024;
+      const approxBytes = Math.floor(((typeof data === 'string' ? data.length : 0) * 3) / 4);
+      if (approxBytes > MAX_MEDIA_BYTES) {
+        return res.status(413).json({
+          error:
+            `That file is about ${(approxBytes / 1e6).toFixed(0)} MB. ` +
+            `Transcription is limited to ${(MAX_MEDIA_BYTES / 1e6).toFixed(0)} MB, ` +
+            `because larger files overwhelm the local model. Trim it or upload a clip.`,
+        });
       }
 
       if (!aiAvailable()) {

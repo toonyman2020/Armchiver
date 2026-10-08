@@ -70,6 +70,8 @@ export interface GenerateOptions {
   timeoutMs?: number;
   /** Internal: set when retrying after a cold model returned done_reason "load". */
   __isRetry?: boolean;
+  /** True when the attached file is audio or video rather than a still image. */
+  media?: boolean;
 }
 
 // Gemini models, most preferred first. Used for failover when one is busy.
@@ -408,14 +410,21 @@ if (!opts.prompt || !opts.prompt.trim()) {
     const detail = String(err?.message || "");
     if (/exceed.*context|context size|n_ctx/i.test(detail)) {
       throw new Error(
-        `"${model}" could not fit this image. It ran out of context space, which ` +
-          `usually means the model is too small or the image is unusually large.`
+        opts.media
+          ? `"${model}" could not fit that media. It ran out of context space. ` +
+              `Try a shorter or smaller clip.`
+          : `"${model}" could not fit this image. It ran out of context space, which ` +
+              `usually means the model is too small or the image is unusually large.`
       );
     }
     if (/Failed to load image or audio file|invalid image/i.test(detail)) {
+      // The same endpoint handles stills and media, so say which one failed.
       throw new Error(
-        "That file could not be read as an image. It is either damaged or not " +
-          "really an image file. Try re-saving or re-exporting it as a JPEG or PNG."
+        opts.media
+          ? "That media file could not be read. It is either damaged or not really a " +
+              "video or audio file. Try re-exporting it, or upload a different clip."
+          : "That file could not be read as an image. It is either damaged or not " +
+              "really an image file. Try re-saving or re-exporting it as a JPEG or PNG."
       );
     }
     if (/HTTP 400/.test(detail) && opts.image) {
