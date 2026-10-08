@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { IS_COMMERCIAL } from "./flags";
 import {
   Upload,
@@ -723,10 +723,12 @@ export default function App() {
       setAiLocalModels(json.models || []);
       setAiServerRunning(Boolean(json.serverRunning));
       setAiOllamaUrl(json.ollamaUrl || null);
+      setAiActiveVisionModel(json.activeVisionModel || null);
     } catch (e) {
       console.error("Failed to list local models:", e);
       setAiLocalModels([]);
       setAiServerRunning(false);
+      setAiActiveVisionModel(null);
     } finally {
       setAiModelsLoading(false);
     }
@@ -793,6 +795,49 @@ export default function App() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [isEditingCreator, isDeveloperModalOpen]);
+
+  const [aiTopBarBusy, setAiTopBarBusy] = useState<"load" | "unload" | null>(null);
+
+  // Name of the model the server says it will use for images.
+  const [aiActiveVisionModel, setAiActiveVisionModel] = useState<string | null>(null);
+
+  // The model the engine would use for an image right now, and whether it is
+  // resident in memory. The server reports the name because it owns the
+  // selection rule; guessing here could offer to load a model that analysis
+  // never uses, which makes the button look broken. The list is only a
+  // fallback for when the server could not name one.
+  const aiActiveModel = useMemo(() => {
+    if (aiActiveVisionModel) return aiActiveVisionModel;
+    const enabled: any[] = (aiLocalModels || []).filter((m) => m.enabled !== false);
+    if (!enabled.length) return null;
+    const vision = enabled.filter((m) => /vision|vl|llava|bakllava|moondream|minicpm|gemma3/i.test(m.name));
+    return (vision[0] || enabled[0])?.name || null;
+  }, [aiLocalModels, aiActiveVisionModel]);
+
+  const aiActiveModelLoaded = useMemo(
+    () => Boolean((aiLocalModels || []).find((m) => m.name === aiActiveModel)?.loaded),
+    [aiLocalModels, aiActiveModel]
+  );
+
+  const handleTopBarLoadModel = async () => {
+    if (!aiActiveModel) return;
+    setAiTopBarBusy("load");
+    try {
+      await handleModelAction(aiActiveModel, "load");
+    } finally {
+      setAiTopBarBusy(null);
+    }
+  };
+
+  const handleTopBarUnloadModel = async () => {
+    if (!aiActiveModel) return;
+    setAiTopBarBusy("unload");
+    try {
+      await handleModelAction(aiActiveModel, "unload");
+    } finally {
+      setAiTopBarBusy(null);
+    }
+  };
 
   const handleToggleModel = async (name: string, enabled: boolean) => {
     setAiBusyModel(name);
@@ -3152,7 +3197,67 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                   <span className="hidden sm:inline">Guide (?)</span>
                 </button>
 
-                {/* Close. On the desktop build this asks whether to keep or
+                {/* Local AI status and controls. Analysis fails if the chosen
+                      model is not resident in memory, so the state and a one
+                      click fix sit in the top bar rather than buried in
+                      settings. */}
+                  <div className="flex items-center gap-1.5 rounded-xl border border-border/60 bg-card/70 px-2 py-1">
+                    <span
+                      className={`w-2 h-2 rounded-full shrink-0 ${
+                        aiStatus?.ready
+                          ? aiActiveModelLoaded
+                            ? "bg-emerald-500"
+                            : "bg-amber-500"
+                          : "bg-destructive"
+                      }`}
+                      title={aiStatus?.detail || "Checking the AI engine..."}
+                    />
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground hidden md:inline">
+                      {aiStatus?.ready
+                        ? aiActiveModelLoaded
+                          ? "AI Ready"
+                          : "AI Idle"
+                        : "AI Offline"}
+                    </span>
+
+                    <button
+                      onClick={handleTopBarLoadModel}
+                      disabled={Boolean(aiTopBarBusy) || !aiActiveModel}
+                      title={
+                        aiActiveModel
+                          ? aiActiveModelLoaded
+                            ? `${aiActiveModel} is loaded and ready`
+                            : `Load ${aiActiveModel} into memory so analysis is ready`
+                          : "No local model selected"
+                      }
+                      className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors disabled:opacity-50 ${
+                        aiActiveModelLoaded
+                          ? "bg-emerald-500/15 text-emerald-500 border-emerald-500/30"
+                          : "bg-amber-500/15 text-amber-500 border-amber-500/30 hover:bg-amber-500/25"
+                      }`}
+                    >
+                      {aiTopBarBusy === "load"
+                        ? "Loading..."
+                        : aiActiveModelLoaded
+                          ? "Loaded"
+                          : "Load AI"}
+                    </button>
+
+                    <button
+                      onClick={handleTopBarUnloadModel}
+                      disabled={Boolean(aiTopBarBusy) || !aiActiveModelLoaded}
+                      title={
+                        aiActiveModelLoaded
+                          ? `Release ${aiActiveModel} from memory`
+                          : "Nothing is loaded"
+                      }
+                      className="px-2 py-1 rounded-lg text-[10px] font-bold border border-border bg-background text-muted-foreground hover:border-destructive/50 hover:text-destructive transition-colors disabled:opacity-50"
+                    >
+                      {aiTopBarBusy === "unload" ? "..." : "Unload"}
+                    </button>
+                  </div>
+
+                  {/* Close. On the desktop build this asks whether to keep or
                     discard in-progress edits, then shuts the local server down
                     with the window. In a browser it just tries to close the tab. */}
                 <button

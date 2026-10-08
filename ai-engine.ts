@@ -36,7 +36,18 @@ export interface AIConfig {
 }
 
 /** Vision models that are good at the app's actual job: counting and naming characters. */
-export const PREFERRED_VISION = ["qwen2.5vl", "qwen2-vl", "minicpm-v", "llava", "moondream"];
+export const PREFERRED_VISION = ["chararchive-vision", "qwen2.5vl", "qwen2-vl", "minicpm-v", "llava", "moondream"];
+
+/**
+ * Preferred name for a derived vision model with a usable context window.
+ *
+ * Ollama's published qwen2.5vl pins num_ctx to 4096, which a single 2K photo
+ * exceeds, so every large upload failed with HTTP 400. Requesting a wider
+ * window per call is ignored because the model's own parameter wins. Creating
+ * a thin alias that only widens the window fixes it and reuses the same weight
+ * blobs. See models/chararchive-vision.Modelfile.
+ */
+export const VISION_MODEL_ALIAS = "chararchive-vision";
 /** Text models tuned to be unfiltered, preferred for creative and character work. */
 export const PREFERRED_TEXT = ["dolphin", "openhermes", "wizardlm", "solar", "mistral-nemo"];
 
@@ -80,7 +91,7 @@ const DEFAULTS: AIConfig = {
   provider: "ollama",
   geminiApiKey: "",
   ollamaBaseUrl: "http://127.0.0.1:11434",
-  ollamaVisionModel: "qwen2.5vl:7b",
+  ollamaVisionModel: VISION_MODEL_ALIAS,
   ollamaTextModel: "dolphin-llama3:8b",
 };
 
@@ -233,18 +244,23 @@ function withTimeout(ms: number, label: string) {
 }
 
 /** Substrings that mark a model as able to accept images. */
-const VISION_HINTS = ["vl", "vision", "llava", "bakllava", "moondream", "minicpm-v", "gemma3"];
+const VISION_HINTS = ["vision", "vl", "llava", "bakllava", "moondream", "minicpm-v", "gemma3"];
 
-async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string> {
-  const url = await resolveOllamaUrl(cfg.ollamaBaseUrl);
-  if (!url) {
-    throw new Error(
-      "No Ollama server answered. Start Ollama, then use Re-check in AI Engine Settings."
-    );
-  }
-
-  const preferred = opts.image ? cfg.ollamaVisionModel : cfg.ollamaTextModel;
-  const hints = opts.image ? PREFERRED_VISION : PREFERRED_TEXT;
+/**
+ * Pick the model that will actually serve a request.
+ *
+ * Split out of callOllama so the UI can ask the engine which model it intends
+ * to use. The top bar used to reimplement this rule in the browser, where it
+ * disagreed with the server and could offer to load the base model instead of
+ * the fixed one, so pressing it did not make analysis work.
+ */
+async function chooseLocalModel(
+  cfg: AIConfig,
+  url: string,
+  wantImage: boolean
+): Promise<string> {
+  const preferred = wantImage ? cfg.ollamaVisionModel : cfg.ollamaTextModel;
+  const hints = wantImage ? PREFERRED_VISION : PREFERRED_TEXT;
 
   // Choose among installed models the user has not switched off. The
   // configured choice wins; otherwise fall back to the best-ranked available
@@ -255,10 +271,18 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
     const { models } = await listLocalModels(url);
     const enabled = models.map((m) => m.name).filter((n) => !isDisabled(cfg, n));
 
-    if (enabled.includes(preferred)) {
+    // The derived wide-context model is the same weights as the base model with
+    // the context window fixed, so it always wins when installed. Trusting a
+    // saved preference here would keep re-selecting the base model and the
+    // uploads would keep failing.
+    const alias = enabled.find((n) => n === VISION_MODEL_ALIAS || n.startsWith(`${VISION_MODEL_ALIAS}:`));
+
+    if (wantImage && alias) {
+      model = alias;
+    } else if (enabled.includes(preferred)) {
       model = preferred;
     } else {
-      const capable = opts.image ? enabled.filter((n) => VISION_HINTS.some((h) => n.includes(h))) : enabled;
+      const capable = wantImage ? enabled.filter((n) => VISION_HINTS.some((h) => n.includes(h))) : enabled;
       const pool = capable.length ? capable : enabled;
 
       if (pool.length) {
@@ -275,7 +299,7 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
         throw new Error(
           total
             ? "Every installed model is switched off. Enable one in AI Engine Settings."
-            : opts.image
+            : wantImage
               ? "No local model that accepts images is installed. Load a vision model such as qwen2.5vl:7b."
               : "No local models are installed. Pull one, then press Refresh in AI Engine Settings."
         );
@@ -288,6 +312,42 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
     }
     console.log("Could not list local models:", err?.message || err);
   }
+
+  return model;
+}
+
+/**
+ * Which model the engine will use for images and for text right now.
+ *
+ * Returns nulls rather than throwing when Ollama is unreachable, so the status
+ * panel can still show what is installed.
+ */
+export async function getActiveModelNames(): Promise<{ vision: string | null; text: string | null }> {
+  const cfg = getConfig();
+  const url = await resolveOllamaUrl(cfg.ollamaBaseUrl);
+  if (!url) return { vision: null, text: null };
+
+  const pick = async (wantImage: boolean) => {
+    try {
+      return await chooseLocalModel(cfg, url, wantImage);
+    } catch {
+      return null;
+    }
+  };
+
+  const [vision, text] = await Promise.all([pick(true), pick(false)]);
+  return { vision, text };
+}
+
+async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string> {
+  const url = await resolveOllamaUrl(cfg.ollamaBaseUrl);
+  if (!url) {
+    throw new Error(
+      "No Ollama server answered. Start Ollama, then use Re-check in AI Engine Settings."
+    );
+  }
+
+  const model = await chooseLocalModel(cfg, url, Boolean(opts.image));
 
   const body: Record<string, unknown> = {
     model,
@@ -306,14 +366,32 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
 
   const timeout = opts.timeoutMs ?? 600000;
   const payload = JSON.stringify(body);
-  const result = await Promise.race([
-    fetchJson<any>(`${url}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: payload,
-    }, timeout + 5000),
-    withTimeout(timeout, `Local model "${model}"`),
-  ]);
+
+  let result: any;
+  try {
+    result = await Promise.race([
+      fetchJson<any>(`${url}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      }, timeout + 5000),
+      withTimeout(timeout, `Local model "${model}"`),
+    ]);
+  } catch (err: any) {
+    // Ollama reports a context overflow as a bare HTTP 400, which tells the
+    // user nothing. Translate it into something actionable.
+    const detail = String(err?.message || "");
+    if (/HTTP 400/.test(detail)) {
+      throw new Error(
+        `"${model}" could not fit this image. It ran out of context space, which ` +
+          `usually means the model is too small or the image is unusually large.`
+      );
+    }
+    if (/HTTP 404/.test(detail)) {
+      throw new Error(`Ollama does not have a model called "${model}".`);
+    }
+    throw err;
+  }
 
   const text = result?.response;
   if (!text) {

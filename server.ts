@@ -13,6 +13,7 @@ import {
   unloadLocalModel,
   getConfig,
   saveConfig,
+  getActiveModelNames,
 } from './ai-engine';
 import { IS_COMMERCIAL } from './src/flags';
 
@@ -561,10 +562,15 @@ async function startServer() {
         String(req.query.ollamaBaseUrl || '') || undefined
       );
       const disabled = new Set(cfg.disabledModels || []);
+      // The model the engine will really use, so the top bar's Load button
+      // targets the same one analysis does rather than guessing in the browser.
+      const active = await getActiveModelNames();
       res.json({
         success: true,
         serverRunning: Boolean(url),
         ollamaUrl: url,
+        activeVisionModel: active.vision,
+        activeTextModel: active.text,
         models: models.map((m) => ({ ...m, enabled: !disabled.has(m.name) })),
       });
     } catch (err: any) {
