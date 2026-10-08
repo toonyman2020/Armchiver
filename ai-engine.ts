@@ -68,6 +68,8 @@ export interface GenerateOptions {
   /** Ask for JSON. Ollama enforces this natively; Gemini uses a response mime type. */
   json?: boolean;
   timeoutMs?: number;
+  /** Internal: set when retrying after a cold model returned done_reason "load". */
+  __isRetry?: boolean;
 }
 
 // Gemini models, most preferred first. Used for failover when one is busy.
@@ -360,6 +362,13 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
     );
   }
 
+  // An empty prompt reaches Ollama as a valid request that produces no content,
+// which then looks like a broken model rather than a broken call. Fail here
+// where the cause is obvious.
+if (!opts.prompt || !opts.prompt.trim()) {
+    throw new Error("The AI request was built with no text to send.");
+  }
+
   const model = await chooseLocalModel(cfg, url, Boolean(opts.image));
 
   const body: Record<string, unknown> = {
@@ -422,10 +431,20 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
 
   const text = result?.response;
   if (!text) {
+    // When a model is not yet in memory Ollama can answer the request with
+    // done_reason "load" and no content: the weights were pulled in and the
+    // turn ended without generating. Treating that as a hard failure meant the
+    // first text request after a restart always failed, even though simply
+    // asking again succeeds. Retry once, which costs the model load the user
+    // was going to pay for anyway.
+    if (result?.done_reason === "load" && !opts.__isRetry) {
+      console.log(`Model "${model}" was still loading; retrying once.`);
+      return callOllama(cfg, { ...opts, __isRetry: true });
+    }
     throw new Error(
       `Local model "${model}" returned an empty response` +
-        (result?.done_reason ? ` (done_reason: ${result.done_reason})` : "") +
-        "."
+        (result?.done_reason ? ` (done_reason: ${result.done_reason})` + ". " : "") +
+        "Try pressing Load AI in the top bar to warm the model, then try again."
     );
   }
   return text;

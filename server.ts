@@ -105,12 +105,23 @@ function aiClient() {
   return {
     models: {
       generateContent: async (args: any) => {
-        const parts: any[] = args?.contents?.parts || [];
-        const prompt = parts
+        // Routes here pass the prompt either as a plain string in `contents` or
+        // as a Gemini-style parts array. Reading only the parts array meant the
+        // routes using a bare string silently sent an empty prompt: the model
+        // had nothing to work from and answered with done_reason "load", which
+        // surfaced as "returned an empty response" and looked like a broken
+        // model. Accept both shapes.
+        const parts: any[] = Array.isArray(args?.contents?.parts) ? args.contents.parts : [];
+        const fromParts = parts
           .filter((p: any) => typeof p?.text === 'string')
           .map((p: any) => p.text)
           .join('\n\n');
+        const prompt = fromParts || (typeof args?.contents === 'string' ? args.contents : '');
         const image = parts.find((p: any) => p?.inlineData?.data)?.inlineData?.data;
+
+        if (!prompt) {
+          throw new Error('The request had no text to send to the AI engine.');
+        }
 
         const text = await generate({
           prompt,
