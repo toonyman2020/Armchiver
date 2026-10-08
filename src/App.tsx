@@ -794,6 +794,30 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [isEditingCreator, isDeveloperModalOpen]);
 
+  const handleToggleModel = async (name: string, enabled: boolean) => {
+    setAiBusyModel(name);
+    setAiTestMessage("");
+    try {
+      const res = await fetch("/api/ai/models/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: name, enabled }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        setAiTestMessage(`Failed: ${json.error || "unknown error"}`);
+      } else {
+        setAiTestMessage(`OK: ${name} switched ${enabled ? "on" : "off"}.`);
+      }
+      await loadAiModels();
+      await loadAiStatus();
+    } catch (e: any) {
+      setAiTestMessage(`Failed: ${e?.message || e}`);
+    } finally {
+      setAiBusyModel(null);
+    }
+  };
+
   const handleSaveAiSettings = async () => {
     setAiSettingsSaving(true);
     setAiTestMessage("");
@@ -5827,7 +5851,11 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                                 {aiLocalModels.map((m: any) => (
                                   <div
                                     key={m.name}
-                                    className="flex items-center justify-between gap-2 p-1.5 rounded bg-secondary/60 border border-border/50"
+                                    className={`flex items-center justify-between gap-2 p-1.5 rounded border ${
+                                      m.enabled === false
+                                        ? "bg-muted/40 border-border/30 opacity-70"
+                                        : "bg-secondary/60 border-border/50"
+                                    }`}
                                   >
                                     <div className="min-w-0">
                                       <div className="text-[11px] font-mono truncate">
@@ -5835,36 +5863,72 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                                       </div>
                                       <div className="text-[9px] text-muted-foreground">
                                         {(m.sizeBytes / 1e9).toFixed(1)} GB &middot;{" "}
-                                        {m.loaded ? (
+                                        {m.enabled === false ? (
+                                          <span className="text-muted-foreground font-semibold">
+                                            switched off
+                                          </span>
+                                        ) : m.loaded ? (
                                           <span className="text-emerald-500 font-semibold">ready</span>
                                         ) : (
                                           <span className="text-amber-500 font-semibold">not loaded</span>
                                         )}
                                       </div>
                                     </div>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleModelAction(m.name, m.loaded ? "unload" : "load")
-                                      }
-                                      disabled={aiBusyModel === m.name}
-                                      className="shrink-0 px-2 py-1 rounded text-[9px] font-bold border border-border bg-background hover:border-primary disabled:opacity-50"
-                                    >
-                                      {aiBusyModel === m.name
-                                        ? "Working..."
-                                        : m.loaded
-                                          ? "Release"
-                                          : "Load"}
-                                    </button>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {m.enabled !== false && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleModelAction(m.name, m.loaded ? "unload" : "load")
+                                          }
+                                          disabled={aiBusyModel === m.name}
+                                          className="px-2 py-1 rounded text-[9px] font-bold border border-border bg-background hover:border-primary disabled:opacity-50"
+                                        >
+                                          {aiBusyModel === m.name
+                                            ? "..."
+                                            : m.loaded
+                                              ? "Release"
+                                              : "Load"}
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={m.enabled !== false}
+                                        aria-label={`${m.enabled !== false ? "Switch off" : "Switch on"} ${m.name}`}
+                                        title={
+                                          m.enabled === false
+                                            ? "Switch this model on"
+                                            : "Switch this model off"
+                                        }
+                                        onClick={() =>
+                                          handleToggleModel(m.name, m.enabled === false)
+                                        }
+                                        disabled={aiBusyModel === m.name}
+                                        className={`relative w-9 h-5 rounded-full border transition-colors disabled:opacity-50 ${
+                                          m.enabled !== false
+                                            ? "bg-emerald-500 border-emerald-500"
+                                            : "bg-muted border-border"
+                                        }`}
+                                      >
+                                        <span
+                                          className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all ${
+                                            m.enabled !== false ? "left-4.5" : "left-0.5"
+                                          }`}
+                                        />
+                                      </button>
+                                    </div>
                                   </div>
                                 ))}
                               </div>
                             )}
 
                             <p className="text-[9px] text-muted-foreground">
-                              An installed model that is not loaded reads its weights from disk on
-                              first use, which can add a minute to the first analysis. Load it
-                              here to move that wait to now.
+                              Use the slider to switch a model on or off. Models are on by
+                              default, and the app picks the best available one for the job.
+                              An installed model that is on but not loaded reads its weights
+                              from disk on first use, which can add a minute; Load it here to
+                              move that wait to now.
                             </p>
                           </div>
                         </>

@@ -11,6 +11,8 @@ import {
   listLocalModels,
   loadLocalModel,
   unloadLocalModel,
+  getConfig,
+  saveConfig,
 } from './ai-engine';
 import { IS_COMMERCIAL } from './src/flags';
 
@@ -60,61 +62,19 @@ console.error = (...args: any[]) => {
 };
 
 // ---------------------------------------------------------------------------
-// AI Engine Settings (managed from inside the app via the Developer panel)
+// AI Engine Settings
+//
+// The configuration lives in ai-engine.ts and is the single source of truth.
+// This file used to keep its own copy, and the two drifted: the engine
+// defaulted to local models while the duplicate here still defaulted to Gemini,
+// so the "is AI available" guard below rejected every local request before the
+// engine was ever reached. Every route asked for a key that was irrelevant.
 // ---------------------------------------------------------------------------
-// Keys are stored in chararchive.config.json next to the app instead of .env so
-// the user never has to hand-edit a file. Loading the key into process.env on
-// boot keeps every existing Gemini code path below working unchanged.
 const CONFIG_PATH = path.join(process.cwd(), 'chararchive.config.json');
-const OLLAMA_DEFAULT_PORT = 11434;
 
-interface AIConfig {
-  provider: 'gemini' | 'ollama' | 'off';
-  geminiApiKey: string;
-  ollamaBaseUrl: string;
-  ollamaVisionModel: string;
-  ollamaTextModel: string;
-}
-
-const DEFAULT_AI_CONFIG: AIConfig = {
-  provider: 'gemini',
-  geminiApiKey: '',
-  ollamaBaseUrl: `http://127.0.0.1:${OLLAMA_DEFAULT_PORT}`,
-  ollamaVisionModel: 'qwen2.5vl:7b',
-  ollamaTextModel: 'dolphin-llama3:8b',
-};
-
-// Windows editors routinely write a UTF-8 BOM, which JSON.parse rejects, so
-// strip it before parsing.
-function readJsonFile(file: string): any {
-  const text = fs.readFileSync(file, 'utf-8').replace(/^\uFEFF/, '');
-  return JSON.parse(text);
-}
-
-function loadAIConfig(): AIConfig {
-  try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      const raw = readJsonFile(CONFIG_PATH);
-      return { ...DEFAULT_AI_CONFIG, ...(raw.ai || {}) };
-    }
-  } catch (err) {
-    console.error('Could not read chararchive.config.json:', err);
-  }
-  return { ...DEFAULT_AI_CONFIG };
-}
-
-function saveAIConfig(cfg: AIConfig) {
-  let existing: any = {};
-  try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      existing = readJsonFile(CONFIG_PATH);
-    }
-  } catch (err) {
-    console.error('Could not parse existing config, starting fresh:', err);
-  }
-  existing.ai = cfg;
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(existing, null, 2), 'utf-8');
-}
+const loadAIConfig = getConfig;
+const saveAIConfig = saveConfig;
+type AIConfig = ReturnType<typeof getConfig>;
 
 // Apply the saved key so the Gemini key-test endpoint and any remaining legacy
 // reads keep working.
@@ -534,16 +494,8 @@ async function startServer() {
     }
   });
 
-  app.get('/api/ai/models', async (req, res) => {
-    try {
-      const { url, models } = await listLocalModels(
-        String(req.query.ollamaBaseUrl || '') || undefined
-      );
-      res.json({ success: true, serverRunning: Boolean(url), ollamaUrl: url, models });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'Could not list models' });
-    }
-  });
+  // Model inventory lives further down, alongside the toggle route, so the
+  // on/off state and the list are returned together.
 
   app.post('/api/ai/models/load', async (req, res) => {
     const name = String(req.body?.model || '').trim();
@@ -565,6 +517,58 @@ async function startServer() {
       res.json({ success: true, ...(await unloadLocalModel(name)) });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Could not unload the model' });
+    }
+  });
+
+  // Switch a model on or off. Off models stay installed and are skipped when
+  // the engine picks one to use, so a model can be muted without a re-download.
+  app.post('/api/ai/models/toggle', async (req, res) => {
+    const name = String(req.body?.model || '').trim();
+    const enabled = Boolean(req.body?.enabled);
+    if (!name) return res.status(400).json({ error: 'No model name given.' });
+
+    try {
+      const cfg = loadAIConfig();
+      const disabled = new Set(cfg.disabledModels || []);
+
+      // Never let the last usable model be switched off, or nothing can run.
+      const { models } = await listLocalModels(cfg.ollamaBaseUrl);
+      const others = models
+        .map((m) => m.name)
+        .filter((n) => n !== name && !disabled.has(n));
+      if (!enabled && others.length === 0) {
+        return res.status(400).json({
+          error: 'At least one model has to stay on. Switch another one on first.',
+        });
+      }
+
+      if (enabled) disabled.delete(name);
+      else disabled.add(name);
+
+      saveAIConfig({ ...cfg, disabledModels: [...disabled] });
+      res.json({ success: true, enabled, disabledModels: [...disabled] });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Could not change the model setting' });
+    }
+  });
+
+  // Flag each model with whether it is switched on, so the panel can render
+  // the right control without a second round trip.
+  app.get('/api/ai/models', async (req, res, next) => {
+    try {
+      const cfg = loadAIConfig();
+      const { url, models } = await listLocalModels(
+        String(req.query.ollamaBaseUrl || '') || undefined
+      );
+      const disabled = new Set(cfg.disabledModels || []);
+      res.json({
+        success: true,
+        serverRunning: Boolean(url),
+        ollamaUrl: url,
+        models: models.map((m) => ({ ...m, enabled: !disabled.has(m.name) })),
+      });
+    } catch (err: any) {
+      next(err);
     }
   });
 

@@ -27,6 +27,27 @@ export interface AIConfig {
   ollamaBaseUrl: string;
   ollamaVisionModel: string;
   ollamaTextModel: string;
+  /**
+   * Models the user has switched off. Only entries present here are disabled,
+   * so a newly installed model is available by default without having to be
+   * enabled first. Keyed by full Ollama model name.
+   */
+  disabledModels?: string[];
+}
+
+/** Vision models that are good at the app's actual job: counting and naming characters. */
+export const PREFERRED_VISION = ["qwen2.5vl", "qwen2-vl", "minicpm-v", "llava", "moondream"];
+/** Text models tuned to be unfiltered, preferred for creative and character work. */
+export const PREFERRED_TEXT = ["dolphin", "openhermes", "wizardlm", "solar", "mistral-nemo"];
+
+export function isDisabled(cfg: AIConfig, name: string): boolean {
+  return (cfg.disabledModels || []).includes(name);
+}
+
+/** Order candidates best-first so a sensible default is chosen automatically. */
+function rank(name: string, hints: string[]): number {
+  const i = hints.findIndex((h) => name.toLowerCase().includes(h));
+  return i === -1 ? hints.length : i;
 }
 
 export interface GenerateOptions {
@@ -223,40 +244,49 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
   }
 
   const preferred = opts.image ? cfg.ollamaVisionModel : cfg.ollamaTextModel;
+  const hints = opts.image ? PREFERRED_VISION : PREFERRED_TEXT;
 
-  // Prefer the configured model, but fall back to whatever is actually
-  // installed. Hard-failing on a name would make the app look broken after a
-  // model is renamed, removed, or simply never downloaded, when another
-  // perfectly capable model is sitting right there.
+  // Choose among installed models the user has not switched off. The
+  // configured choice wins; otherwise fall back to the best-ranked available
+  // model for the job. Hard-failing on a name would make the app look broken
+  // after a model is renamed, removed, or never downloaded.
   let model = preferred;
   try {
     const { models } = await listLocalModels(url);
-    const names = models.map((m) => m.name);
+    const enabled = models.map((m) => m.name).filter((n) => !isDisabled(cfg, n));
 
-    if (!names.includes(preferred)) {
-      const candidates = opts.image ? names.filter((n) => VISION_HINTS.some((h) => n.includes(h))) : names;
-      if (candidates.length) {
-        model = candidates[0];
+    if (enabled.includes(preferred)) {
+      model = preferred;
+    } else {
+      const capable = opts.image ? enabled.filter((n) => VISION_HINTS.some((h) => n.includes(h))) : enabled;
+      const pool = capable.length ? capable : enabled;
+
+      if (pool.length) {
+        // Sort best-first so the strongest model is used by default.
+        pool.sort((a, b) => rank(a, hints) - rank(b, hints));
+        model = pool[0];
         console.log(
-          `Local model "${preferred}" is not installed. Using "${model}" instead.`
+          preferred === model
+            ? `Using local model "${model}".`
+            : `Local model "${preferred}" is unavailable. Using "${model}" instead.`
         );
-      } else if (names.length) {
-        model = names[0];
       } else {
+        const total = models.length;
         throw new Error(
-          opts.image
-            ? "No local model that accepts images is installed. Load a vision model such as qwen2.5vl:7b."
-            : "No local models are installed. Pull one, then press Refresh in AI Engine Settings."
+          total
+            ? "Every installed model is switched off. Enable one in AI Engine Settings."
+            : opts.image
+              ? "No local model that accepts images is installed. Load a vision model such as qwen2.5vl:7b."
+              : "No local models are installed. Pull one, then press Refresh in AI Engine Settings."
         );
       }
     }
   } catch (err: any) {
     // A listing failure should not block the request; let the call itself try.
-    if (!/No local model|No local models/.test(err?.message || "")) {
-      console.log("Could not list local models:", err?.message || err);
-    } else {
+    if (/switched off|No local model/.test(err?.message || "")) {
       throw err;
     }
+    console.log("Could not list local models:", err?.message || err);
   }
 
   const body: Record<string, unknown> = {
