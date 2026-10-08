@@ -294,6 +294,17 @@ function parseJsonContent(jsonStr: string): string {
 const modelFailures = new Map<string, { count: number; lastFailed: number }>();
 
 function getModelsToTry(): string[] {
+  // Failover between Gemini models only means anything when Gemini is the
+  // configured provider. With Ollama the engine picks one local model for the
+  // whole request, so every "alternate candidate" below would run the exact
+  // same call again. That turned a single failure into seven identical
+  // multi-minute attempts before the error finally surfaced, and the log
+  // named Gemini models that were never involved.
+  const cfg = loadAIConfig();
+  if (cfg.provider !== 'gemini') {
+    return ['local'];
+  }
+
   // A robust selection of current stable Gemini multimodal models
   const allModels = [
     'gemini-3.5-flash-lite',
@@ -695,7 +706,9 @@ async function startServer() {
       let prompt = `Analyze this image and act as an Archive Analyzer.\n`;
       prompt += `
 CRITICAL CONSOLIDATION & COUNTING RULES (DO NOT OVER-COUNT):
+- Separate subjects: If the image shows several subjects standing apart as their own distinct figures (for example a group shot, two characters side by side, or a crowd), count EACH one separately. Do not merge them just because they share a style, species, or colour. Two similar-looking characters standing side by side are two characters.
 - Duplicate / Multi-Angle Entities: If the image is a character model sheet, character turnaround, or includes the same character multiple times in different angles, poses, crops, or zoom levels, DO NOT count them as separate characters. Consolidate them into a single character entry. The "totalCharacterCount" should count this character as 1.
+- Distinguishing the two: consolidate only when the figures overlap, are shown in different poses or angles of the same subject, or are part of one turn-around layout. If two subjects are fully visible and do not overlap, they are separate characters.
 - Character Age & Design Variations: If the image shows variations of the same character (such as a younger/kid version and an older/adult version, or versions with minor outfits/aesthetic changes but sharing core distinct details like facial features, eyes, scars, hairstyle, or theme), consolidate them into 1 character entry representing that master character.
   - In the consolidated character's "description", explicitly note both variations (e.g., "Depicts the character both as a young child and as an older adult, sharing similar golden hair and blue eyes").
   - Use a combined "suggestedName" indicating the variations if applicable (e.g., "Kaelen (Child & Adult)" or just "Kaelen").
@@ -805,7 +818,7 @@ Return the result as a strict JSON object matching this schema exactly:
       while (attempt < modelsToTry.length) {
         const modelName = modelsToTry[attempt];
         try {
-          console.log(`Analyzing image with model ${modelName} (attempt ${attempt + 1}/${modelsToTry.length})...`);
+          console.log(`Analyzing image (attempt ${attempt + 1}/${modelsToTry.length})...`);
           
           const imagePart = {
             inlineData: {
@@ -827,7 +840,7 @@ Return the result as a strict JSON object matching this schema exactly:
 
           const responseText = response.text;
           if (!responseText) {
-            throw new Error('Empty response from Gemini model');
+            throw new Error('The AI engine returned an empty response.');
           }
           result = cleanAndParseJSON(responseText);
           
@@ -835,7 +848,7 @@ Return the result as a strict JSON object matching this schema exactly:
           modelFailures.delete(modelName);
           break; // Success
         } catch (e: any) {
-          console.log(`Model ${modelName} is busy or offline (attempt ${attempt + 1}/${modelsToTry.length}). Switching to alternate candidate...`);
+          console.log(`Attempt ${attempt + 1}/${modelsToTry.length} failed: ${e?.message || e}`);
           
           // Record model failure to deprioritize it for other incoming requests
           modelFailures.set(modelName, { count: (modelFailures.get(modelName)?.count || 0) + 1, lastFailed: Date.now() });
@@ -910,7 +923,9 @@ Return the result as a strict JSON object matching this schema exactly:
       let prompt = `Analyze this text and act as an Archive Analyzer.\n`;
       prompt += `
 CRITICAL CONSOLIDATION & COUNTING RULES (DO NOT OVER-COUNT):
+- Separate subjects: If the text introduces several distinct named characters, count EACH one separately. Do not merge them just because they share a faction, species, or description pattern.
 - Duplicate / Multi-Mention Entities: If the text describes or references the same character multiple times in different context/scenes/turns, DO NOT count them as separate characters. Consolidate them into a single character entry. The "totalCharacterCount" should count this character as 1.
+- Distinguishing the two: consolidate only when the text is clearly describing one subject across different scenes or references. Two separately named characters with their own names, goals, or dialogue are two characters.
 - Character Age & Design Variations: If the text describes variations of the same character (such as a younger/kid version and an older/adult version, or versions with outfit/aesthetic changes but sharing core distinct details like facial features, eyes, scars, hairstyle, or theme), consolidate them into 1 character entry representing that master character.
   - In the consolidated character's "description", explicitly note both variations (e.g., "Described both as a young child and as an older adult, sharing similar characteristics").
   - Use a combined "name" indicating the variations if applicable (e.g., "Kaelen (Child & Adult)" or just "Kaelen").
@@ -1011,7 +1026,7 @@ ${textContent}
       while (attempt < modelsToTry.length) {
         const modelName = modelsToTry[attempt];
         try {
-          console.log(`Analyzing text with model ${modelName} (attempt ${attempt + 1}/${modelsToTry.length})...`);
+          console.log(`Analyzing text (attempt ${attempt + 1}/${modelsToTry.length})...`);
           const response = await ai.models.generateContent({
             model: modelName,
             contents: { parts: contentsParts },
@@ -1022,7 +1037,7 @@ ${textContent}
 
           const responseText = response.text;
           if (!responseText) {
-            throw new Error('Empty response from Gemini model');
+            throw new Error('The AI engine returned an empty response.');
           }
           result = cleanAndParseJSON(responseText);
           
@@ -1030,7 +1045,7 @@ ${textContent}
           modelFailures.delete(modelName);
           break; // Success
         } catch (e: any) {
-          console.log(`Model ${modelName} is busy or offline (attempt ${attempt + 1}/${modelsToTry.length}). Switching to alternate candidate...`);
+          console.log(`Attempt ${attempt + 1}/${modelsToTry.length} failed: ${e?.message || e}`);
           
           // Record model failure to deprioritize it for other incoming requests
           modelFailures.set(modelName, { count: (modelFailures.get(modelName)?.count || 0) + 1, lastFailed: Date.now() });
@@ -1147,7 +1162,7 @@ Return the result as a strict JSON object with this schema:
       while (attempt < modelsToTry.length) {
         const modelName = modelsToTry[attempt];
         try {
-          console.log(`Analyzing multimodal dump with model ${modelName} (attempt ${attempt + 1}/${modelsToTry.length})...`);
+          console.log(`Analyzing media (attempt ${attempt + 1}/${modelsToTry.length})...`);
           const response = await ai.models.generateContent({
             model: modelName,
             contents: { parts: contentsParts },
@@ -1158,13 +1173,13 @@ Return the result as a strict JSON object with this schema:
 
           const responseText = response.text;
           if (!responseText) {
-            throw new Error('Empty response from Gemini model');
+            throw new Error('The AI engine returned an empty response.');
           }
           result = cleanAndParseJSON(responseText);
           modelFailures.delete(modelName);
           break;
         } catch (e: any) {
-          console.log(`Model ${modelName} is busy or offline (attempt ${attempt + 1}/${modelsToTry.length}). Switching to alternate candidate...`);
+          console.log(`Attempt ${attempt + 1}/${modelsToTry.length} failed: ${e?.message || e}`);
           modelFailures.set(modelName, { count: (modelFailures.get(modelName)?.count || 0) + 1, lastFailed: Date.now() });
           attempt++;
           if (attempt >= modelsToTry.length) throw e;
@@ -1413,7 +1428,7 @@ Return strict JSON:
       while (attempt < modelsToTry.length) {
         const modelName = modelsToTry[attempt];
         try {
-          console.log(`Transcribing media with model ${modelName} (attempt ${attempt + 1}/${modelsToTry.length})...`);
+          console.log(`Transcribing media (attempt ${attempt + 1}/${modelsToTry.length})...`);
           const response = await ai.models.generateContent({
             model: modelName,
             contents: { parts: contentsParts },
@@ -1424,13 +1439,13 @@ Return strict JSON:
 
           const responseText = response.text;
           if (!responseText) {
-            throw new Error('Empty response from Gemini model');
+            throw new Error('The AI engine returned an empty response.');
           }
           result = cleanAndParseJSON(responseText);
           modelFailures.delete(modelName);
           break;
         } catch (e: any) {
-          console.log(`Model ${modelName} is busy or offline (attempt ${attempt + 1}/${modelsToTry.length}). Switching to alternate candidate...`);
+          console.log(`Attempt ${attempt + 1}/${modelsToTry.length} failed: ${e?.message || e}`);
           modelFailures.set(modelName, { count: (modelFailures.get(modelName)?.count || 0) + 1, lastFailed: Date.now() });
           attempt++;
           if (attempt >= modelsToTry.length) throw e;
@@ -1493,7 +1508,7 @@ ${text}`;
       while (attempt < modelsToTry.length) {
         const modelName = modelsToTry[attempt];
         try {
-          console.log(`Organizing text with model ${modelName} (attempt ${attempt + 1}/${modelsToTry.length})...`);
+          console.log(`Organizing text (attempt ${attempt + 1}/${modelsToTry.length})...`);
           const response = await ai.models.generateContent({
             model: modelName,
             contents,
@@ -1504,7 +1519,7 @@ ${text}`;
           modelFailures.delete(modelName);
           break;
         } catch (e: any) {
-          console.log(`Model ${modelName} is busy or offline (attempt ${attempt + 1}/${modelsToTry.length}). Switching to alternate candidate...`);
+          console.log(`Attempt ${attempt + 1}/${modelsToTry.length} failed: ${e?.message || e}`);
           modelFailures.set(modelName, { count: (modelFailures.get(modelName)?.count || 0) + 1, lastFailed: Date.now() });
           attempt++;
           if (attempt >= modelsToTry.length) throw e;
@@ -1571,7 +1586,7 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
       while (attempt < modelsToTry.length) {
         const modelName = modelsToTry[attempt];
         try {
-          console.log(`Generating profile with model ${modelName} (attempt ${attempt + 1}/${modelsToTry.length})...`);
+          console.log(`Generating profile (attempt ${attempt + 1}/${modelsToTry.length})...`);
           const response = await ai.models.generateContent({
             model: modelName,
             contents,
@@ -1581,7 +1596,7 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
           modelFailures.delete(modelName);
           break;
         } catch (e: any) {
-          console.log(`Model ${modelName} is busy or offline (attempt ${attempt + 1}/${modelsToTry.length}). Switching to alternate candidate...`);
+          console.log(`Attempt ${attempt + 1}/${modelsToTry.length} failed: ${e?.message || e}`);
           modelFailures.set(modelName, { count: (modelFailures.get(modelName)?.count || 0) + 1, lastFailed: Date.now() });
           attempt++;
           if (attempt >= modelsToTry.length) throw e;
@@ -1628,7 +1643,7 @@ Do not include any formatting, markdown wrappers, or explanations outside of the
       while (attempt < modelsToTry.length) {
         const modelName = modelsToTry[attempt];
         try {
-          console.log(`Generating description with model ${modelName} (attempt ${attempt + 1}/${modelsToTry.length})...`);
+          console.log(`Generating description (attempt ${attempt + 1}/${modelsToTry.length})...`);
           const response = await ai.models.generateContent({
             model: modelName,
             contents,
@@ -1638,7 +1653,7 @@ Do not include any formatting, markdown wrappers, or explanations outside of the
           modelFailures.delete(modelName);
           break;
         } catch (e: any) {
-          console.log(`Model ${modelName} is busy or offline (attempt ${attempt + 1}/${modelsToTry.length}). Switching to alternate candidate...`);
+          console.log(`Attempt ${attempt + 1}/${modelsToTry.length} failed: ${e?.message || e}`);
           modelFailures.set(modelName, { count: (modelFailures.get(modelName)?.count || 0) + 1, lastFailed: Date.now() });
           attempt++;
           if (attempt >= modelsToTry.length) throw e;
@@ -1705,7 +1720,7 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
       while (attempt < modelsToTry.length) {
         const modelName = modelsToTry[attempt];
         try {
-          console.log(`Processing character command with model ${modelName} (attempt ${attempt + 1}/${modelsToTry.length})...`);
+          console.log(`Processing character command (attempt ${attempt + 1}/${modelsToTry.length})...`);
           const response = await ai.models.generateContent({
             model: modelName,
             contents,
@@ -1715,7 +1730,7 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
           modelFailures.delete(modelName);
           break;
         } catch (e: any) {
-          console.log(`Model ${modelName} is busy or offline (attempt ${attempt + 1}/${modelsToTry.length}). Switching to alternate candidate...`);
+          console.log(`Attempt ${attempt + 1}/${modelsToTry.length} failed: ${e?.message || e}`);
           modelFailures.set(modelName, { count: (modelFailures.get(modelName)?.count || 0) + 1, lastFailed: Date.now() });
           attempt++;
           if (attempt >= modelsToTry.length) throw e;

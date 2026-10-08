@@ -190,7 +190,20 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 8000): 
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { ...init, signal: ctrl.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      // Ollama explains its refusals in the body ("Failed to load image or
+      // audio file", "exceeds the available context size"). Reporting only the
+      // status left callers unable to tell a corrupt upload from an oversized
+      // one, so they could only guess. Keep the body, with the status first so
+      // existing status matching still works.
+      let detail = "";
+      try {
+        detail = JSON.stringify(await res.json());
+      } catch {
+        // A non-JSON error body is not worth reporting on its own.
+      }
+      throw new Error(`HTTP ${res.status}${detail ? `: ${detail}` : ""}`);
+    }
     return (await res.json()) as T;
   } finally {
     clearTimeout(timer);
@@ -379,12 +392,26 @@ async function callOllama(cfg: AIConfig, opts: GenerateOptions): Promise<string>
     ]);
   } catch (err: any) {
     // Ollama reports a context overflow as a bare HTTP 400, which tells the
-    // user nothing. Translate it into something actionable.
+    // user nothing. Translate it into something actionable, but only when it
+    // really is an overflow: a 400 also covers unreadable or corrupt files,
+    // and calling those "unusually large" sends the user chasing the wrong
+    // problem.
     const detail = String(err?.message || "");
-    if (/HTTP 400/.test(detail)) {
+    if (/exceed.*context|context size|n_ctx/i.test(detail)) {
       throw new Error(
         `"${model}" could not fit this image. It ran out of context space, which ` +
           `usually means the model is too small or the image is unusually large.`
+      );
+    }
+    if (/Failed to load image or audio file|invalid image/i.test(detail)) {
+      throw new Error(
+        "That file could not be read as an image. It is either damaged or not " +
+          "really an image file. Try re-saving or re-exporting it as a JPEG or PNG."
+      );
+    }
+    if (/HTTP 400/.test(detail) && opts.image) {
+      throw new Error(
+        "The AI engine rejected that image. Try re-saving it, or upload a different file."
       );
     }
     if (/HTTP 404/.test(detail)) {
