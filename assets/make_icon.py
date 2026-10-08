@@ -1,136 +1,151 @@
 """
-Generate the CharArchive application icon.
+Design the CharArchive app icon.
 
-The mark is the studio's wooden-mannequin mascot, Artie, set into a circular
-portrait on the app's dark plate. The face is lifted from the artwork the app
-already ships rather than redrawn, so the icon and the mascot never drift apart.
+The app is a record-keeping archive for character and asset sheets, so the icon
+is a bound reference volume standing on a shelf, with a clasp and a ribbon
+marker. Colours follow the app's own dark theme: slate background, amber
+focal point, emerald accent.
 
-Outputs:
-    assets/icon.png      256x256 master
-    assets/icon.ico      seven standard Windows resolutions
-    public/*             PWA icon set (see make_pwa_icons.py)
-
-Usage:
-    python assets\\make_icon.py
+Drawn at 4x and downsampled so the curves stay clean at 16px.
 """
 import os
-import sys
+from PIL import Image, ImageDraw
 
-from PIL import Image, ImageDraw, ImageFilter
+OUT_DIR = r"Z:\Armchiver\App\assets"
+PNG = os.path.join(OUT_DIR, "icon_preview.png")
+ICO = os.path.join(OUT_DIR, "icon.ico")
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+S = 1024          # working resolution
+F = 4             # supersample factor for the small sizes
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MASCOT = os.path.join(ROOT, "src", "assets", "images", "wooden_dummy_1786259892970.jpg")
-
-SS = 4                      # supersample factor
-S = 256                    # final icon size
-C = S * SS
-
-TOP = (44, 52, 88)         # deep indigo plate, matches the app's dark UI
-BOT = (12, 14, 22)
-RING = (150, 200, 255)     # light blue ring around the portrait
-
-# Square crop around the mascot's head in the 1024x1024 source, in source
-# pixels. Centred on the face (about 507, 283) so the beret is not clipped and
-# the pale paper background does not dominate the circle.
-CROP = (292, 56, 740, 504)
-
-
-def rounded_mask(w, h, radius):
-    m = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(m).rounded_rectangle([0, 0, w - 1, h - 1], radius=radius, fill=255)
-    return m
+# Theme colours
+BG_TOP = (30, 41, 59)      # slate-800
+BG_BOT = (15, 23, 42)      # slate-900
+BOARD = (71, 85, 105)      # slate-600, the shelf edge
+BOARD_DK = (51, 65, 85)
+LEATHER = (146, 64, 14)    # amber-800 leather
+LEATHER_D = (120, 53, 15)
+LEATHER_L = (180, 83, 9)
+PAGES = (226, 232, 240)    # slate-200 page block
+PAGES_D = (148, 163, 184)
+GOLD = (245, 158, 11)      # amber-500 clasp
+GOLD_D = (202, 138, 4)
+RIBBON = (16, 185, 129)    # emerald-500 marker
+RIBBON_D = (5, 150, 105)
+EMERALD = (52, 211, 153)
 
 
-def vertical_gradient(w, h, top, bot):
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    span = max(1, h - 1)
-    for y in range(h):
-        t = y / span
-        draw.line(
-            [(0, y), (w, y)],
-            fill=(
-                int(top[0] + (bot[0] - top[0]) * t),
-                int(top[1] + (bot[1] - top[1]) * t),
-                int(top[2] + (bot[2] - top[2]) * t),
-                255,
-            ),
-        )
+def rounded(draw, box, r, fill):
+    draw.rounded_rectangle(box, radius=r, fill=fill)
+
+
+def make_icon(scale=1):
+    """Draw one icon at `scale` times the base size."""
+    n = S * scale
+    u = n / 1024.0                      # one design unit in pixels
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    def X(v):
+        return v * u
+
+    # ---- Background: rounded app tile, dark slate, subtle vertical fade ----
+    bg = Image.new("RGBA", (n, n), BG_BOT + (255,))
+    grad = Image.new("L", (n, n))
+    gd = ImageDraw.Draw(grad)
+    for y in range(n):
+        t = y / max(1, n - 1)
+        shade = int(255 * (1 - t * 0.55))
+        gd.line([(0, y), (n - 1, y)], fill=shade)
+    bg.paste(Image.new("RGBA", (n, n), BG_TOP + (255,)), (0, 0), grad)
+    mask = Image.new("L", (n, n), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, n - 1, n - 1], radius=int(X(224)), fill=255)
+    img.paste(bg, (0, 0), mask)
+    d = ImageDraw.Draw(img)
+
+    # ---- Shelf the volume stands on ----
+    shelf_y = X(792)
+    rounded(d, [X(150), shelf_y, X(874), shelf_y + X(46)], int(X(23)), BOARD)
+    rounded(d, [X(150), shelf_y + X(34), X(874), shelf_y + X(46)], int(X(12)), BOARD_DK)
+
+    # ---- The volume: cover, spine, page block ----
+    left, right = X(268), X(756)
+    top, bottom = X(232), X(792)
+
+    # Page block peeking out on the right, so it reads as a bound volume
+    rounded(d, [right - X(30), top + X(26), right + X(34), bottom - X(18)], int(X(16)), PAGES)
+    for i in range(7):
+        yy = top + X(96 + i * 82)
+        d.line([(right - X(26), yy), (right + X(30), yy)], fill=PAGES_D + (255,), width=int(X(7)))
+
+    # Spine
+    rounded(d, [left, top, left + X(96), bottom], int(X(26)), LEATHER_D)
+
+    # Front cover
+    rounded(d, [left + X(80), top, right, bottom], int(X(22)), LEATHER)
+
+    # Cover sheen: a lighter panel so the face is not flat
+    rounded(d, [left + X(140), top + X(48), right - X(54), bottom - X(54)], int(X(18)), LEATHER_L)
+
+    # Gilt rules top and bottom of the cover
+    for gy in (top + X(112), bottom - X(112)):
+        rounded(d, [left + X(140), gy, right - X(54), gy + X(13)], int(X(6)), GOLD)
+
+    # ---- Clasp: the focal amber detail ----
+    clasp_x = right - X(150)
+    rounded(d, [clasp_x, top + X(56), clasp_x + X(96), top + X(150)], int(X(20)), GOLD)
+    rounded(d, [clasp_x, top + X(86), clasp_x + X(96), top + X(120)], int(X(14)), GOLD_D)
+    d.ellipse([clasp_x + X(30), top + X(86), clasp_x + X(66), top + X(122)], fill=BG_BOT + (255,))
+
+    # ---- Ribbon marker hanging from the spine edge ----
+    # Placed over the spine rather than across the cover, so it cannot cross
+    # the ledger lines or the clasp.
+    rib_l, rib_r = left + X(18), left + X(92)
+    d.polygon(
+        [(rib_l, top + X(10)), (rib_r, top + X(10)), (rib_r, bottom - X(196)), (rib_l, bottom - X(196))],
+        fill=RIBBON,
+    )
+    d.polygon(
+        [(rib_l, bottom - X(196)), (rib_r, bottom - X(196)),
+         (rib_r - X(18), bottom - X(168)), (rib_l, bottom - X(232))],
+        fill=RIBBON_D,
+    )
+    d.line([(rib_l, top + X(10)), (rib_l, bottom - X(196))], fill=RIBBON_D + (255,), width=int(X(9)))
+    d.line([(rib_r, top + X(10)), (rib_r, bottom - X(196))], fill=RIBBON_D + (255,), width=int(X(9)))
+
+    # ---- Ledger lines on the cover panel, so it reads as records ----
+    # Kept strictly inside the lighter panel so nothing spills onto the pages.
+    panel_l = left + X(140)
+    panel_r = right - X(54)
+    rib_edge = rib_r + X(18)
+    for i in range(4):
+        ly = top + X(228 + i * 72)
+        line_l = max(panel_l + X(40), rib_edge)
+        line_r = panel_r - X(30) - (i * 26 * u if False else i * X(26))
+        if line_r - line_l < X(40):
+            break
+        rounded(d, [line_l, ly, line_r, ly + X(18)], int(X(9)), PAGES)
+
     return img
 
 
-def mascot_portrait(diameter):
-    """Circular crop of the mascot's head, sized to fill the ring."""
-    if not os.path.exists(MASCOT):
-        raise SystemExit(
-            f"Mascot artwork not found:\n  {MASCOT}\n"
-            "The icon is generated from this file, so it must be present."
-        )
-
-    src = Image.open(MASCOT).convert("RGB")
-    side = CROP[2] - CROP[0]
-    if side != CROP[3] - CROP[1]:
-        raise SystemExit("CROP must be square so the portrait is not stretched")
-    head = src.crop(CROP).resize((diameter, diameter), Image.LANCZOS)
-
-    # Circular mask, then feather the edge very slightly so it does not look
-    # harshly cut out at small sizes.
-    mask = Image.new("L", (diameter, diameter), 0)
-    ImageDraw.Draw(mask).ellipse([0, 0, diameter - 1, diameter - 1], fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(diameter * 0.004))
-
-    portrait = Image.new("RGBA", (diameter, diameter), (0, 0, 0, 0))
-    portrait.paste(head.convert("RGBA"), (0, 0), mask)
-    return portrait
-
-
-def build():
-    radius = int(C * 0.22)
-    plate = Image.new("RGBA", (C, C), (0, 0, 0, 255))
-    plate.paste(vertical_gradient(C, C, TOP, BOT), (0, 0), rounded_mask(C, C, radius))
-
-    # Soft highlight across the top of the plate.
-    hl = Image.new("RGBA", (C, C), (0, 0, 0, 0))
-    ImageDraw.Draw(hl).ellipse(
-        [-int(C * 0.35), -int(C * 0.80), int(C * 1.35), int(C * 0.55)],
-        fill=(255, 255, 255, 22),
-    )
-    plate = Image.alpha_composite(plate, hl)
-    d = ImageDraw.Draw(plate)
-
-    # Portrait, inset so the ring reads clearly around it.
-    dia = int(C * 0.70)
-    pad = (C - dia) // 2
-    ring_w = max(2, int(C * 0.030))
-
-    d.ellipse(
-        [pad - ring_w, pad - ring_w, pad + dia + ring_w, pad + dia + ring_w],
-        fill=RING + (255,),
-    )
-    plate.paste(mascot_portrait(dia), (pad, pad), mascot_portrait(dia))
-
-    return plate.resize((S, S), Image.LANCZOS)
-
-
 def main():
-    icon = build()
+    master = make_icon(1)
+    master.resize((512, 512), Image.LANCZOS).save(PNG)
+    print(f"preview -> {PNG}")
 
-    # Fail loudly rather than shipping a blank or white icon.
-    probe = icon.convert("RGBA")
-    corner = probe.getpixel((128, 12))
-    centre = probe.getpixel((128, 128))
-    assert corner[3] == 255 and all(c <= 140 for c in corner[:3]), f"plate is wrong: {corner}"
-    assert sum(centre[:3]) > 150, f"portrait looks empty: {centre}"
-
-    icon.save(os.path.join(ROOT, "assets", "icon.png"))
-    icon.save(
-        os.path.join(ROOT, "assets", "icon.ico"),
-        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+    # Every size Windows asks for, each rendered at high resolution and
+    # downsampled, so small sizes are crisp rather than a shrunken 1024.
+    sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+    frames = []
+    for px, _ in sizes:
+        big = make_icon(max(1, int(round(px / 16))))
+        frames.append(big.resize((px, px), Image.LANCZOS))
+    frames[max(range(len(sizes)), key=lambda i: sizes[i][0])].save(
+        ICO, format="ICO", sizes=sizes, append_images=frames[:-1]
     )
-    print("wrote assets/icon.png and assets/icon.ico")
-    print(f"plate check {corner} | portrait check {centre}")
+    print(f"icon    -> {ICO}")
+    print(f"sizes   -> {sizes}")
 
 
 if __name__ == "__main__":
