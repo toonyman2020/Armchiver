@@ -16,6 +16,7 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
+    "model:setup": "node assets\\setup_models.cjs",
     "electron:dev": "electron .",
     "electron:start": "npm run build && electron .",
     "package": "npm run build && electron-builder --win --x64",

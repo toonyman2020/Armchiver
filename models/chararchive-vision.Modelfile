@@ -1,0 +1,15 @@
+# CharArchive image-analysis model
+#
+# Ollama's published qwen2.5vl pins its context window to 4096 tokens. An
+# image costs roughly (width / 28) * (height / 28) tokens, so a single 2K
+# photo needs over 4000 tokens before the app's request schema is even
+# counted. Uploads therefore failed with HTTP 400 "exceeds the available
+# context size".
+#
+# Requesting num_ctx per call does not help, because the Modelfile parameter
+# wins. Deriving a model with a wider window is the fix. It reuses the same
+# weight blobs, so this costs no extra disk space.
+#
+# Create it with: npm run model:setup
+FROM qwen2.5vl:7b
+PARAMETER num_ctx 32768
