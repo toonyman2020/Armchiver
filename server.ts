@@ -156,7 +156,7 @@ function aiUnavailableReason(): string {
   if (cfg.provider === 'ollama') {
     return 'No local model server answered. Start Ollama, then press Re-check in AI Engine Settings.';
   }
-  return 'GEMINI_API_KEY is not set. Add a key in AI Engine Settings, or switch to Local Ollama.';
+  return 'No API key is saved for the cloud provider. Add one in AI Engine Settings, or switch to Local Ollama.';
 }
 
 const OLLAMA_FALLBACK_PORTS = [11434, 11435, 11436];
@@ -317,7 +317,7 @@ function getModelsToTry(): string[] {
   // multi-minute attempts before the error finally surfaced, and the log
   // named Gemini models that were never involved.
   const cfg = loadAIConfig();
-  if (cfg.provider !== 'gemini') {
+  if (cfg.provider !== 'editorial') {
     return ['local'];
   }
 
@@ -445,7 +445,7 @@ async function startServer() {
 
       const next: AIConfig = {
         provider:
-          incoming.provider === 'ollama' || incoming.provider === 'off' || incoming.provider === 'gemini'
+          incoming.provider === 'ollama' || incoming.provider === 'off' || incoming.provider === 'editorial'
             ? incoming.provider
             : current.provider,
         geminiApiKey:
@@ -495,7 +495,7 @@ async function startServer() {
         model: 'gemini-2.0-flash',
         contents: 'Reply with the single word: OK',
       });
-      res.json({ success: true, message: 'Gemini key is valid and responding.' });
+      res.json({ success: true, message: 'Cloud provider key is valid and responding.' });
     } catch (err: any) {
       res.json({
         success: false,
@@ -1903,7 +1903,7 @@ Do not include any markup, markdown wrappers, or explanations outside of the JSO
 
   console.log(`Server running on http://localhost:${PORT} (bound to ${HOST} only)`);
   console.log(
-    `AI provider: ${aiConfig.provider} | Gemini key: ${aiConfig.geminiApiKey ? 'set' : 'not set'} | Ollama: ${aiConfig.ollamaBaseUrl}`
+    `AI provider: ${aiConfig.provider} | cloud key: ${aiConfig.geminiApiKey ? 'set' : 'not set'} | Ollama: ${aiConfig.ollamaBaseUrl}`
   );
 }
 

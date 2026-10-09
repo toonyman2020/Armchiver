@@ -176,7 +176,7 @@ export function CharacterEditor({
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Gemini spelling, grammar and organization states
+  // AI spelling, grammar and organization states
   const [isCheckingText, setIsCheckingText] = useState(false);
   const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
   const [quickDumpText, setQuickDumpText] = useState('');
@@ -239,7 +239,7 @@ export function CharacterEditor({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectSearchQuery, setProjectSearchQuery] = useState<string>('');
 
-  // Gemini Editorial Auto-Check toggle
+  // Editorial Auto-Check toggle
   const [autoCheckSpelling, setAutoCheckSpelling] = useState<boolean>(false);
 
   // Default spectrum colors per main tab
@@ -1365,6 +1365,82 @@ export function CharacterEditor({
       updateBiblePageContent(activeDetailSubTab, aiReport.organizedText);
       alert("Spelling & Grammar corrections applied!");
     }
+  };
+
+  /**
+   * Send the Editorial Suite report into the record instead of leaving it in
+   * the side panel. Two destinations, deliberately:
+   *
+   *   - a dated page in the section index, so the report is kept as its own
+   *     entry rather than merged into notes the user already wrote;
+   *   - the main description, but only when that field is empty, so pressing
+   *     Send twice can never overwrite work typed by hand.
+   */
+  const sendReportToProfile = () => {
+    if (!aiReport) return;
+
+    const sections = aiReport.bibleSections;
+    const parts: string[] = [];
+    if (sections) {
+      const labelled: Array<[string, string | undefined]> = [
+        ['Executive Concepts', sections.executiveConcepts],
+        ['Core Premise', sections.corePremise],
+        ['Height & Build', sections.heightBuild],
+        ['Personality & Speech', sections.personalitySpeech],
+      ];
+      for (const [label, value] of labelled) {
+        if (value && value.trim()) parts.push(`**${label}:** ${value.trim()}`);
+      }
+    }
+    if (aiReport.organizedText && aiReport.organizedText.trim()) {
+      parts.push(aiReport.organizedText.trim());
+    }
+    if (aiReport.corrections && aiReport.corrections.length) {
+      const fixes = aiReport.corrections
+        .filter((c) => c.original !== c.corrected)
+        .map((c) => `- "${c.original}" -> "${c.corrected}"`)
+        .join('\n');
+      if (fixes) parts.push(`**Corrections applied:**\n${fixes}`);
+    }
+
+    if (!parts.length) {
+      setCopyToast('Nothing in the report to send.');
+      return;
+    }
+
+    const body = parts.join('\n\n');
+    const pageTitle = `Editorial Report - ${new Date().toLocaleDateString()}`;
+
+    setFormData(prev => {
+      const next = { ...prev };
+      const existing = prev.biblePages || [];
+      const clash = existing.some(
+        (p) => (p.title || '').toLowerCase() === pageTitle.toLowerCase(),
+      );
+
+      if (!clash) {
+        next.biblePages = [
+          ...existing,
+          {
+            id: `page-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            title: pageTitle,
+            content: body,
+            parentId: null,
+            isLocked: false,
+          },
+        ];
+      }
+
+      // Only fill an empty description. Overwriting one the user wrote would
+      // lose their work for no gain.
+      if (!next.description || !next.description.trim()) {
+        next.description = body;
+      }
+      return next;
+    });
+
+    setCopyToast(`Sent to your profile as "${pageTitle}".`);
+    setAiReport(null);
   };
 
   const loadSectionTemplate = (tabId: string) => {
@@ -6035,7 +6111,7 @@ Please perform a complete, holistic character profile analysis and synthesis.
                           <span className="bg-primary/10 text-primary text-[10px] px-2 py-0.5 rounded-full font-bold uppercase">Multimodal AI</span>
                         </h3>
                         <p className="text-[11px] text-muted-foreground font-medium">
-                          Dump raw text, images, audio tracks (soundtracks, voiceovers), or video clips. Gemini transcribes speech, extracts visual traits, and builds your profile.
+                          Dump raw text, images, audio tracks (soundtracks, voiceovers), or video clips. The analyzer transcribes speech, extracts visual traits, and builds your profile.
                         </p>
                       </div>
                     </div>
@@ -6308,21 +6384,30 @@ Please perform a complete, holistic character profile analysis and synthesis.
                   </div>
                 </div>
 
-                {/* Gemini AI Suggestions & Editorial Panel */}
+                {/* AI Suggestions & Editorial Panel */}
                 <div className="w-full lg:w-80 bg-secondary/10 border rounded-xl p-4 space-y-4 overflow-y-auto max-h-[440px]">
                   <div className="flex items-center justify-between border-b pb-2">
                     <div className="flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-purple-600" />
-                      <h4 className="font-bold text-sm">Gemini Editorial Suite</h4>
+                      <h4 className="font-bold text-sm">Editorial Suite</h4>
                     </div>
                     {aiReport && (
-                      <button 
-                        onClick={() => setAiReport(null)}
-                        className="text-muted-foreground hover:text-foreground text-xs font-semibold cursor-pointer p-1"
-                        title="Dismiss report"
-                      >
-                        Dismiss
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button 
+                          onClick={sendReportToProfile}
+                          className="bg-primary text-primary-foreground px-2.5 py-1 rounded text-[11px] font-black hover:bg-primary/90 transition-all cursor-pointer"
+                          title="Save this report into the section index and fill the description"
+                        >
+                          Send to Profile
+                        </button>
+                        <button 
+                          onClick={() => setAiReport(null)}
+                          className="text-muted-foreground hover:text-foreground text-xs font-semibold cursor-pointer p-1"
+                          title="Dismiss report"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
                     )}
                   </div>
 

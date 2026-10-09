@@ -28,6 +28,37 @@ function appRoot() {
 }
 
 /**
+ * Where the local AI models live.
+ *
+ * Ollama reads this from the environment of whatever process started it, so a
+ * value left over from an earlier machine layout can send it to the wrong
+ * folder. That happened here: a stale OLLAMA_MODELS pointing at an abandoned
+ * drive left Ollama serving an older model set with no derived vision model in
+ * it, and analysis quietly fell back to a model that cannot read large images.
+ *
+ * The models belong beside the app, so the app decides rather than inheriting.
+ * An explicit environment variable still wins, so a developer can point
+ * somewhere else on purpose.
+ */
+function resolveModelsDir() {
+  const explicit = process.env.CHARARCHIVE_MODELS || process.env.OLLAMA_MODELS;
+  if (explicit && fs.existsSync(explicit)) return explicit;
+
+  // Walk up from the installed app looking for the models folder. Packaged as
+  // <root>/CharArchive/CharArchive.exe, the models live at <root>/ollama/models.
+  let dir = appRoot();
+  for (let i = 0; i < 5 && dir; i++) {
+    const candidate = path.join(dir, "ollama", "models");
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return null;
+}
+
+/**
  * Where the trimmed runtime dependencies live.
  *
  * In development that is the repo's own node_modules. In a packaged build the
@@ -107,10 +138,24 @@ function startServer() {
   // wherever those packages actually live in this installation.
   const modules = runtimeModules();
 
+  // Settle the models folder before anything is spawned. Correct it here
+  // rather than inheriting a value from whoever launched the app, and apply it
+  // to this process too so any Ollama the app starts agrees.
+  const modelsDir = resolveModelsDir();
+  if (modelsDir) {
+    process.env.OLLAMA_MODELS = modelsDir;
+    console.log(`[models] using ${modelsDir}`);
+  } else {
+    console.log(
+      "[models] No models folder found next to the app. Ollama will use its own default."
+    );
+  }
+
   serverProcess = fork(bundle, [], {
     cwd: root,
     env: {
       ...process.env,
+      ...(modelsDir ? { OLLAMA_MODELS: modelsDir } : {}),
       // The React bundle is prebuilt, so always serve from dist.
       NODE_ENV: "production",
       PORT: String(SERVER_PORT),

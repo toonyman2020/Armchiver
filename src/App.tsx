@@ -664,8 +664,8 @@ export default function App() {
   // AI engine settings (persisted server-side in chararchive.config.json)
   const [aiSettings, setAiSettings] = useState<any>(null);
   const [aiDraft, setAiDraft] = useState<any>({
-    provider: "gemini",
-    geminiApiKey: "",
+    provider: "editorial",
+    editorialApiKey: "",
     ollamaBaseUrl: "http://127.0.0.1:11434",
     ollamaVisionModel: "",
     ollamaTextModel: "",
@@ -692,7 +692,7 @@ export default function App() {
         setAiDraft((d: any) => ({
           ...d,
           provider: json.provider,
-          geminiApiKey: "",
+          editorialApiKey: "",
           ollamaBaseUrl: json.ollamaBaseUrl,
           ollamaVisionModel: json.ollamaVisionModel,
           ollamaTextModel: json.ollamaTextModel,
@@ -886,11 +886,11 @@ export default function App() {
     }
   };
 
-  const handleClearGeminiKey = async () => {
+  const handleClearEditorialKey = async () => {
     setAiSettingsSaving(true);
     try {
       await fetch("/api/settings/ai/clear-key", { method: "POST" });
-      setAiDraft((d: any) => ({ ...d, geminiApiKey: "" }));
+      setAiDraft((d: any) => ({ ...d, editorialApiKey: "" }));
       setAiTestMessage("Saved key removed from this computer.");
       await loadAiSettings();
     } finally {
@@ -898,14 +898,14 @@ export default function App() {
     }
   };
 
-  const handleTestGeminiKey = async () => {
+  const handleTestEditorialKey = async () => {
     setAiSettingsSaving(true);
     setAiTestMessage("");
     try {
       const res = await fetch("/api/settings/ai/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: aiDraft.geminiApiKey.trim() }),
+        body: JSON.stringify({ apiKey: aiDraft.editorialApiKey.trim() }),
       });
       const json = await res.json();
       setAiTestMessage(
@@ -1015,8 +1015,8 @@ System Key Features:
 Framework: React 18 + Vite + TypeScript (Full-Stack Express App)
 Deployment: Cloud Run Container Ingress
 Server Configuration: Port 3000 (Exposed proxy)
-Core Engine: Google Gemini GenAI Multimodal Analyzer & Text Cataloger
-AI Model Fallbacks: gemini-3.7-flash, gemini-flash-latest, gemini-3.1-flash-lite, gemini-3.1-pro-preview
+Core Engine: AI Multimodal Analyzer & Text Cataloger
+AI Model Fallbacks: local, editorial-flash, editorial-pro
 Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists)
 
 --------------------------------------------------------------------------------
@@ -1276,7 +1276,7 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
           <p>
             CharArchive is an advanced digital character scanner, scanning workspace, and media archive system.
             It utilizes Vite, React, TypeScript, and a full-stack Node.js/Express server to orchestrate local caches,
-            multimodal Google Gemini analyses, automatic duplicate detection, and visual cataloging. This file serves
+            multimodal AI analyses, automatic duplicate detection, and visual cataloging. This file serves
             as a complete standalone archive and backup of the entire ecosystem as of <strong>June 28, 2026</strong>.
           </p>
 
@@ -1850,7 +1850,7 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
         break;
       }
       
-      // Stagger uploads slightly to respect Gemini rate limits under free tier
+      // Stagger uploads slightly to respect API rate limits under free tier
       if (completed > 0) {
         await new Promise((resolve) => setTimeout(resolve, 800));
       }
@@ -2974,7 +2974,7 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                     <span>Armstech Artchiver Database Analyzer (AADA)</span>
                   </h1>
                   <p className="text-xs text-muted-foreground mt-1 max-w-4xl leading-relaxed">
-                    A comprehensive, high-security character model sheet, illustration, and database analysis platform with real-time Gemini vision scanning and automatic duplicates tracking.
+                    A comprehensive, high-security character model sheet, illustration, and database analysis platform with real-time AI vision scanning and automatic duplicates tracking.
                   </p>
                 </div>
                 <button
@@ -5684,7 +5684,7 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                     ) : aiSettings ? (
                       <span
                         className={`text-[10px] px-2 py-1 rounded font-semibold ${
-                          aiSettings.provider === "gemini" && !aiSettings.hasGeminiKey
+                          aiSettings.provider === "editorial" && !aiSettings.hasEditorialKey
                             ? "bg-amber-500/10 text-amber-500"
                             : aiSettings.provider === "ollama" && !aiSettings.ollamaRunning
                               ? "bg-amber-500/10 text-amber-500"
@@ -5693,10 +5693,10 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                                 : "bg-emerald-500/10 text-emerald-500"
                         }`}
                       >
-                        {aiSettings.provider === "gemini"
-                          ? aiSettings.hasGeminiKey
-                            ? "Gemini Ready"
-                            : "Gemini: No Key"
+                        {aiSettings.provider === "editorial"
+                          ? aiSettings.hasEditorialKey
+                            ? "AI Ready"
+                            : "AI: No Key"
                           : aiSettings.provider === "ollama"
                             ? aiSettings.ollamaRunning
                               ? "Ollama Ready"
@@ -5719,7 +5719,7 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                     <div className="grid grid-cols-3 gap-1.5">
                       {(
                         [
-                          { id: "gemini", label: "Google Gemini" },
+                          { id: "editorial", label: "Editorial (legacy)" },
                           { id: "ollama", label: "Local Ollama" },
                           { id: "off", label: "Disabled" },
                         ] as const
@@ -5740,21 +5740,21 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                     </div>
                   </div>
 
-                  {/* Gemini key */}
-                  {aiDraft.provider === "gemini" && (
+                  {/* Editorial key */}
+                  {aiDraft.provider === "editorial" && (
                     <div className="space-y-2 rounded-md border border-border/50 bg-card/50 p-3">
                       <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-                        Gemini API Key
+                        Editorial API Key
                       </label>
                       <div className="flex gap-2 items-center">
                         <input
                           type="password"
-                          value={aiDraft.geminiApiKey}
+                          value={aiDraft.editorialApiKey}
                           onChange={(e) =>
-                            setAiDraft((d) => ({ ...d, geminiApiKey: e.target.value }))
+                            setAiDraft((d) => ({ ...d, editorialApiKey: e.target.value }))
                           }
                           placeholder={
-                            aiSettings?.hasGeminiKey
+                            aiSettings?.hasEditorialKey
                               ? `Saved: ${aiSettings.maskedKey}`
                               : "Paste your API key here"
                           }
@@ -5762,7 +5762,7 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                         />
                         <button
                           type="button"
-                          onClick={() => setAiDraft((d) => ({ ...d, geminiApiKey: "" }))}
+                          onClick={() => setAiDraft((d) => ({ ...d, editorialApiKey: "" }))}
                           className="px-2 py-2 rounded bg-secondary text-[10px] font-semibold border border-border hover:border-destructive/50 hover:text-destructive"
                           title="Clear the key field"
                         >
@@ -5781,16 +5781,16 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                         </button>
                         <button
                           type="button"
-                          onClick={handleTestGeminiKey}
-                          disabled={aiSettingsSaving || !aiDraft.geminiApiKey.trim()}
+                          onClick={handleTestEditorialKey}
+                          disabled={aiSettingsSaving || !aiDraft.editorialApiKey.trim()}
                           className="px-3 py-1.5 rounded bg-secondary border border-border text-[10px] font-bold disabled:opacity-50"
                         >
                           Test Key
                         </button>
-                        {aiSettings?.hasGeminiKey && (
+                        {aiSettings?.hasEditorialKey && (
                           <button
                             type="button"
-                            onClick={handleClearGeminiKey}
+                            onClick={handleClearEditorialKey}
                             disabled={aiSettingsSaving}
                             className="px-3 py-1.5 rounded bg-secondary border border-border text-[10px] font-bold text-destructive disabled:opacity-50"
                           >
@@ -6755,7 +6755,7 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                     </div>
                     <p className="text-slate-300 font-semibold mb-1">Multi-Feature Analyzer & Coordinate Ingestion</p>
                     <ul className="list-disc pl-4 text-slate-400 space-y-1 leading-relaxed">
-                      <li>Upgraded the server-side Gemini prompt schema to return coordinates of interest inside a structured schema (featuresOfInterest).</li>
+                      <li>Upgraded the server-side AI prompt schema to return coordinates of interest inside a structured schema (featuresOfInterest).</li>
                       <li>Created a specialized coordinate cropper canvas in the client application to ingest the analyzer's crops automatically.</li>
                     </ul>
                   </div>
@@ -6766,7 +6766,7 @@ Storage System: LocalStorage Persistent Client Caches (profiles, settings, lists
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-bold text-slate-300 font-mono text-[11px] bg-slate-800 px-1.5 py-0.5 rounded">v1.4.0</span>
                     </div>
-                    <p className="text-slate-300 font-semibold mb-1">Gemini AI Image & Text Analysis API</p>
+                    <p className="text-slate-300 font-semibold mb-1">Image & Text Analysis API</p>
                     <ul className="list-disc pl-4 text-slate-400 space-y-1 leading-relaxed">
                       <li>Integrated the @google/genai server route.</li>
                       <li>Implemented face/portrait detection using AI bounding boxes for smart automatic character cropping.</li>

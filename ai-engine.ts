@@ -19,7 +19,7 @@
 import fs from "fs";
 import path from "path";
 
-export type Provider = "gemini" | "ollama" | "off";
+export type Provider = "editorial" | "ollama" | "off";
 
 export interface AIConfig {
   provider: Provider;
@@ -107,7 +107,15 @@ function readJson(file: string): any {
 export function getConfig(): AIConfig {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
-      return { ...DEFAULTS, ...(readJson(CONFIG_PATH).ai || {}) };
+      const cfg = { ...DEFAULTS, ...(readJson(CONFIG_PATH).ai || {}) };
+      // The cloud provider is called "editorial" in the interface. Configs and
+      // saved settings written before that rename still carry the old id, and
+      // an unrecognised value would fall through every check below and end in
+      // a confusing error, so accept both.
+      if ((cfg.provider as string) === "gemini") {
+        cfg.provider = "editorial";
+      }
+      return cfg;
     }
   } catch (err) {
     console.error("Could not read chararchive.config.json:", err);
@@ -483,7 +491,7 @@ async function callGemini(apiKey: string, opts: GenerateOptions): Promise<string
       });
 
       const text = response.text;
-      if (!text) throw new Error("Empty response from Gemini model");
+      if (!text) throw new Error("The AI engine returned an empty response.");
       return text;
     } catch (err) {
       lastError = err;
@@ -508,7 +516,7 @@ export async function generate(opts: GenerateOptions): Promise<string> {
   }
   if (!cfg.geminiApiKey) {
     throw new Error(
-      "GEMINI_API_KEY is not set. Add a key in AI Engine Settings, or switch to Local Ollama."
+      "No API key is saved for the cloud provider. Add one in AI Engine Settings, or switch to Local Ollama."
     );
   }
   return callGemini(cfg.geminiApiKey, opts);
@@ -524,13 +532,13 @@ export async function engineStatus() {
     hasGeminiKey: Boolean(cfg.geminiApiKey),
   };
 
-  if (cfg.provider === "gemini") {
+  if (cfg.provider === "editorial") {
     return {
       ...base,
       ready: base.hasGeminiKey,
       detail: base.hasGeminiKey
-        ? `Google Gemini via ${GEMINI_MODELS[0]}`
-        : "No Gemini key saved. Add one, or switch to Local Ollama.",
+        ? `Cloud provider via ${GEMINI_MODELS[0]}`
+        : "No cloud provider key saved. Add one, or switch to Local Ollama.",
     };
   }
 
@@ -545,12 +553,48 @@ export async function engineStatus() {
 
   const { models } = await listLocalModels(url);
   const byName = new Map(models.map((m) => [m.name, m]));
-  const vision = byName.get(cfg.ollamaVisionModel);
-  const text = byName.get(cfg.ollamaTextModel);
+
+  // Report the model analysis will really use, not the saved preference. The
+  // two differ whenever the derived wide-context model is installed, and
+  // checking the saved name let a build with the wrong vision model report
+  // itself healthy.
+  let visionName = cfg.ollamaVisionModel;
+  let textName = cfg.ollamaTextModel;
+  try {
+    const active = await getActiveModelNames();
+    if (active.vision) visionName = active.vision;
+    if (active.text) textName = active.text;
+  } catch {
+    // Fall back to the configured names; the checks below still report.
+  }
+
+  const vision = byName.get(visionName);
+  const text = byName.get(textName);
 
   const problems: string[] = [];
-  if (!vision) problems.push(`vision model "${cfg.ollamaVisionModel}" is not installed`);
-  if (!text) problems.push(`text model "${cfg.ollamaTextModel}" is not installed`);
+  if (!vision) problems.push(`vision model "${visionName}" is not installed`);
+  if (!text) problems.push(`text model "${textName}" is not installed`);
+
+  // Ollama picks its models folder from the environment it was started with,
+  // so it can end up serving an older set. The derived model is the reliable
+  // tell: it exists on disk but not in the served list means Ollama is pointed
+  // somewhere else, and every large upload will fail with a context error.
+  if (!vision) {
+    const expected = process.env.OLLAMA_MODELS;
+    const aliasOnDisk =
+      expected &&
+      fs.existsSync(
+        path.join(expected, "manifests", "registry.ollama.ai", "library", VISION_MODEL_ALIAS)
+      );
+    if (aliasOnDisk) {
+      problems.push(
+        `"${VISION_MODEL_ALIAS}" is installed in ${expected} but Ollama is not serving it. ` +
+          `Ollama was started with a different models folder. Quit Ollama and start it again, ` +
+          `or set OLLAMA_MODELS to ${expected}.`
+      );
+    }
+  }
+
   const warm = (m?: LocalModelInfo) => (m?.loaded ? "loaded" : "not loaded yet");
 
   return {
@@ -558,7 +602,7 @@ export async function engineStatus() {
     ready: problems.length === 0,
     detail: problems.length
       ? problems.join("; ")
-      : `${url} — ${cfg.ollamaVisionModel}: ${warm(vision)}, ${cfg.ollamaTextModel}: ${warm(text)}`,
+      : `${url} — ${visionName}: ${warm(vision)}, ${textName}: ${warm(text)}`,
     visionLoaded: Boolean(vision?.loaded),
     textLoaded: Boolean(text?.loaded),
     models,
