@@ -316,7 +316,7 @@ export default function App() {
   );
   const [scanMode, setScanMode] = useState<"basic" | "advanced">(
     () =>
-      (safeGetStorage("scanMode") as "basic" | "advanced") || "basic",
+      (safeGetStorage("scanMode") as "basic" | "advanced") || "advanced",
   );
   const [countingMode, setCountingMode] = useState<"multiple" | "single">(
     () =>
